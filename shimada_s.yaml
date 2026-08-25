@@ -1,0 +1,18 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# Shimada dataset - 13 classes
+# Example usage: yolo train data=shimada.yaml model=yolo26n.pt
+
+# Train/val sets
+path: D:\dataset\shimada\step2\ # dataset root dir
+train: train\s\images # train images
+val: val\s\images # val images
+test: # test images (optional)
+
+# Classes
+names:
+  0: KP
+  1: LW-QX-S4
+  2: MKP
+  3: QK
+  4: SK

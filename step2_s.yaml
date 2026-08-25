@@ -1,0 +1,15 @@
+# Ultralytics AGPL-3.0 License
+# Shimada dataset - 5 classes
+# Train/val sets
+path: D:\dataset\shimada\step2
+train: s/train/images
+val: s/val/images
+test: 
+
+# Classes
+names:
+  0: KP
+  1: LW-QX-S4
+  2: MKP
+  3: QK
+  4: SK
