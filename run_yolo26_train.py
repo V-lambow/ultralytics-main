@@ -1,6 +1,8 @@
-from ultralytics import YOLO
 import argparse
+
 import torch
+
+from ultralytics import YOLO
 
 
 def main():
@@ -8,8 +10,15 @@ def main():
     default_device = "0" if use_cuda else "cpu"
 
     parser = argparse.ArgumentParser(description="YOLO26 Training Script")
-    parser.add_argument("--model", type=str, default="./models/yolo26m.pt", help="model name e.g. yolo26n.pt, yolo26s.pt, yolo26m.pt, yolo26l.pt, yolo26x.pt")
-    parser.add_argument("--data", type=str, default="coco8.yaml", help="dataset config e.g. coco8.yaml, coco.yaml, visdrone.yaml")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="./models/yolo26m.pt",
+        help="model name e.g. yolo26n.pt, yolo26s.pt, yolo26m.pt, yolo26l.pt, yolo26x.pt",
+    )
+    parser.add_argument(
+        "--data", type=str, default="coco8.yaml", help="dataset config e.g. coco8.yaml, coco.yaml, visdrone.yaml"
+    )
     parser.add_argument("--epochs", type=int, default=100, help="number of training epochs")
     parser.add_argument("--batch", type=int, default=16, help="batch size")
     parser.add_argument("--imgsz", type=int, default=640, help="image size")
@@ -23,10 +32,14 @@ def main():
     parser.add_argument("--lr0", type=float, default=0.01, help="initial learning rate")
     parser.add_argument("--patience", type=int, default=100, help="early stopping patience")
     parser.add_argument("--resume", action="store_true", help="resume training from last checkpoint")
-    parser.add_argument("--amp", action="store_true", default=use_cuda, help="Automatic Mixed Precision (auto-off on CPU)")
+    parser.add_argument(
+        "--amp", action="store_true", default=use_cuda, help="Automatic Mixed Precision (auto-off on CPU)"
+    )
     parser.add_argument("--no-amp", dest="amp", action="store_false", help="disable AMP")
     parser.add_argument("--cache", type=str, default="False", help="cache images: True, ram, disk, or False")
-    parser.add_argument("--task", type=str, default="detect", choices=["detect", "segment", "classify", "pose", "obb"], help="task type")
+    parser.add_argument(
+        "--task", type=str, default="detect", choices=["detect", "segment", "classify", "pose", "obb"], help="task type"
+    )
     parser.add_argument("--plots", action="store_true", default=True, help="save plots and images")
     parser.add_argument("--save-period", type=int, default=-1, help="save checkpoint every N epochs")
     parser.add_argument("--cfg", type=str, default=None, help="path to custom config.yaml")
