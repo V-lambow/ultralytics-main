@@ -138,6 +138,7 @@ venv.bak/
 
 # mkdocs documentation
 /site
+/config
 
 # mypy
 .mypy_cache/
@@ -199,6 +200,7 @@ calibration_*.npy
 *.heic
 *.ico
 *.raw
+*.exe
 
 # Training logs
 args.yaml

@@ -1,3 +1,12 @@
+import importlib.metadata
+_orig_read_text = importlib.metadata.PathDistribution.read_text
+def _safe_read_text(self, name):
+    try:
+        return _orig_read_text(self, name)
+    except UnicodeDecodeError:
+        return None
+importlib.metadata.PathDistribution.read_text = _safe_read_text
+
 import tornado.ioloop
 import tornado.web
 import cv2
@@ -10,6 +19,44 @@ from loguru import logger
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from ultralytics import YOLO
+
+
+def create_polygon_mask(img_shape, points):
+    """
+    根据多边形顶点创建mask
+    points: list of [x, y] 坐标
+    返回: 单通道mask，多边形内为255，其余为0
+    """
+    mask = np.zeros(img_shape[:2], dtype=np.uint8)
+    pts = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
+    cv2.fillPoly(mask, [pts], 255)
+    return mask
+
+
+def apply_region_mask(img, a_config):
+    """
+    根据配置中的inner/outer对图像做mask处理
+    - inner: 只保留inner多边形区域，其余置0
+    - outer: 将outer多边形区域置0，保留其余部分
+    - 无inner/outer: 返回原图
+    """
+    inner_cfg = a_config.get('inner')
+    outer_cfg = a_config.get('outer')
+
+    if inner_cfg:
+        points = inner_cfg.get('points', [])
+        if points:
+            mask = create_polygon_mask(img.shape, points)
+            return cv2.bitwise_and(img, img, mask=mask)
+
+    if outer_cfg:
+        points = outer_cfg.get('points', [])
+        if points:
+            mask = create_polygon_mask(img.shape, points)
+            mask_inv = cv2.bitwise_not(mask)
+            return cv2.bitwise_and(img, img, mask=mask_inv)
+
+    return img
 
 
 def compute_iou(box_a, box_b):
@@ -95,35 +142,21 @@ class ImageDefectHandler(tornado.web.RequestHandler):
     os.makedirs(ultralytics_dir, exist_ok=True)
     os.environ["ULTRALYTICS_SETTINGS"] = os.path.join(ultralytics_dir, "settings.json")
     os.environ["ULTRALYTICS_CACHE"] = os.path.join(ultralytics_dir, "cache")
-    onnx_model_path = "ckpt\yolo11n.pt"
-            
-    model = YOLO(onnx_model_path, task="detect")
+    model = None
+
     def initialize(self, template_dir, mask_dir, config_path):
         self.template_dir = template_dir
         self.mask_dir = mask_dir
         self.config_path = config_path
         self.detect_config = self.load_config()
-        # 创建线程池执行器，用于异步处理可视化任务和模型推理
         self.executor = ThreadPoolExecutor(max_workers=4)
-        
-        # 设置Ultralytics的配置目录到当前项目目录，避免权限问题
-     
-       
-        
-        # 加载YOLO模型 - 这里使用Ultralytics的默认模型，实际部署时应替换为ONNX模型
-        # 如果有ONNX模型文件，可以使用 YOLO("model.onnx") 加载
-        try:
-            # logger.info("Loading YOLO model...")
-            # 尝试加载ONNX模型，如果没有则使用默认模型
-           
-            # logger.info(f"Loaded ONNX model: {onnx_model_path}")
-            
-            # 创建线程锁，确保推理过程线程安全
-            self.model_lock = threading.Lock()
-            # logger.info("Model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load model: {str(e)}")
-            raise RuntimeError(f"Model loading failed: {str(e)}")
+        self.model_lock = threading.Lock()
+
+        model_path = self.detect_config.get("model_path", "models/yolo26x.pt")
+        if not os.path.isabs(model_path):
+            model_path = os.path.join(os.getcwd(), model_path)
+        ImageDefectHandler.model = YOLO(model_path, task="detect")
+        logger.info(f"Loaded model: {model_path}")
 
     def load_config(self):
         """
@@ -146,41 +179,36 @@ class ImageDefectHandler(tornado.web.RequestHandler):
             file_names = data.get('file_names', [])
             relative_dir = data.get('relative_dir', '')
             
-            # 滑窗参数（可选）
-            slide_rows = data.get('slide_rows', None)
-            slide_cols = data.get('slide_cols', None)
-            overlap_pixels = data.get('overlap_pixels', 0)
-            border_expand = data.get('border_expand', 0)
-            
             logger.info(f"Received request: job_id={job_id}, sample_id={sample_id}, pose_id={pose_id}, "
-                       f"file_names={file_names}, slide_rows={slide_rows}, slide_cols={slide_cols}, "
-                       f"overlap_pixels={overlap_pixels}, border_expand={border_expand}")
+                       f"file_names={file_names}")
             
             if not file_names:
                 raise ValueError("file_names is required")
             
             image_path = os.path.join(relative_dir, file_names[0])
             
-            # 判断是否使用滑窗模式
-            use_slide_window = slide_rows is not None and slide_cols is not None
+            # 从配置文件读取滑窗参数
+            use_slide_window = self.detect_config.get('use_slide_window', False)
+            slide_rows = int(self.detect_config.get('slide_rows', 0))
+            slide_cols = int(self.detect_config.get('slide_cols', 0))
+            overlap_pixels = int(self.detect_config.get('overlap_pixels', 0))
+            border_expand = int(self.detect_config.get('border_expand', 0))
+            self.imgsz = int(self.detect_config.get('imgsz', 640))
+            self.device = self.detect_config.get('device', 'cpu')
             
             if use_slide_window:
-                # 使用滑窗推理
-                slide_rows = int(slide_rows)
-                slide_cols = int(slide_cols)
-                overlap_pixels = int(overlap_pixels)
-                border_expand = int(border_expand)
-                
                 logger.info(f"Using slide window mode: {slide_rows}x{slide_cols}, "
                            f"overlap={overlap_pixels}px, border_expand={border_expand}px")
-                
                 results = await self.process_image_slide_window(
                     image_path, pose_id, sample_id,
                     slide_rows, slide_cols, overlap_pixels, border_expand
                 )
             else:
-                # 使用原始单窗口推理
-                results = await self.process_image(image_path, pose_id, sample_id)
+                logger.info("Using direct crop mode (slide_window disabled)")
+                results = await self.process_image_slide_window(
+                    image_path, pose_id, sample_id,
+                    slide_rows, slide_cols, overlap_pixels, border_expand
+                )
             
             # 如果有检测结果，异步绘制并保存，不阻塞主事件循环
             if results:
@@ -218,91 +246,7 @@ class ImageDefectHandler(tornado.web.RequestHandler):
                 "error_msg": "False"
             })
 
-    async def process_image(self, image_path, pose_id, sample_id):
-        """
-        基于Ultralytics YOLO的目标检测推理方法
-        保留原接口兼容性，返回格式与原方法一致
-        """
-        try:
-            # 读取待检测图片
-            img = cv2.imread(image_path)
-            
-            if img is None:
-                raise FileNotFoundError(f"Image not found: {image_path}")
-            
-            # 获取当前pose_id对应的配置
-            pose_config = self.detect_config.get(pose_id, {})
-            if not pose_config:
-                raise ValueError(f"No configuration found for pose_id: {pose_id}")
-            
-            all_defects = []
-            
-            # 按配置文件信息region裁剪图片，支持多个A**区域配置时循环裁剪并推理
-            for a_label, a_config in pose_config.items():
-                region = a_config.get('region', [])
-                if len(region) != 4:
-                    logger.warning(f"Invalid region configuration for {a_label}: {region}")
-                    continue
-                
-                x1, y1, x2, y2 = region
-                
-                # 裁剪区域
-                roi = img[y1:y2, x1:x2]
-                if roi.size == 0:
-                    logger.warning(f"Empty ROI for {a_label} with region {region}")
-                    continue
-                
-                # 使用线程池异步执行模型推理，确保线程安全
-                results = await tornado.ioloop.IOLoop.current().run_in_executor(
-                    self.executor, 
-                    self.run_yolo_inference, 
-                    roi
-                )
-                
-                # 获取当前区域的阈值
-                threshold = a_config.get('threshold', 0.25)
-                
-                # 检查是否有置信度大于threshold的项
-                has_high_confidence = False
-                max_confidence = 0.0
-                for result in results:
-                    boxes = result.boxes
-                    for box in boxes:
-                        confidence = float(box.conf[0])
-                        label = int(box.cls[0])
-                        max_confidence = max(max_confidence, confidence)
-                        if confidence > threshold:
-                            has_high_confidence = True
-                            
-                    
-                    if has_high_confidence:
-                        break
-                
-                # 根据TODO要求：若有置信度大于threshold的项，返回空结果。若没有返回region
-                if has_high_confidence:
-                    logger.info(f"Found high confidence defect in {a_label}, returning empty result for this region")
-                    # 返回空缺陷列表表示该区域有问题
-                    continue
-                else:
-                    # 返回该区域的位置信息
-                    defect = {
-                        'code': 'CuoLouZhuang',  # 将h_label改为code，值为CuoLouZhuang
-                        'box': region,  # 返回整个区域
-                        'area': (x2 - x1) * (y2 - y1),
-                        'length': max(x2 - x1, y2 - y1),
-                        'confidence': max_confidence  # 没有检测到缺陷，置信度为0
-                    }
-                    all_defects.append(defect)
-            
-            logger.info(f"YOLO detection completed, found {len(all_defects)} regions without high confidence defects")
-            return all_defects
-            
-        except Exception as e:
-            logger.warning(f"Error in process_image: {str(e)}")
-            # 保留原接口的异常处理行为
-            raise
-
-    def run_yolo_inference(self, img):
+    def run_yolo_inference(self, img, imgsz=640):
         """
         执行YOLO模型推理，确保线程安全
         """
@@ -312,7 +256,8 @@ class ImageDefectHandler(tornado.web.RequestHandler):
                 results = self.model(img, 
                                     conf=0.25,  # 置信度阈值
                                     iou=0.45,   # IOU阈值
-                                    device='cpu',  # 使用CPU，可根据需要改为'cuda'
+                                    imgsz=imgsz,  # 推理图像尺寸
+                                    device=self.device,
                                     verbose=False)
                 return results
         except Exception as e:
@@ -557,33 +502,18 @@ class ImageDefectHandler(tornado.web.RequestHandler):
 
             # 对每个区域配置进行滑窗检测
             for a_label, a_config in pose_config.items():
-                region = a_config.get('region', [])
                 threshold = a_config.get('threshold', 0.25)
 
-                if len(region) == 4:
-                    # 有region配置，只在指定区域内滑窗
-                    x1, y1, x2, y2 = region
-                    roi_img = img[y1:y2, x1:x2]
-                    if roi_img.size == 0:
-                        logger.warning(f"Empty ROI for {a_label} with region {region}")
-                        continue
+                # 应用polygon mask（inner保留区域，outer排除区域）
+                masked_img = apply_region_mask(img, a_config)
 
-                    # 计算区域内的滑窗位置
-                    roi_h, roi_w = roi_img.shape[:2]
-                    roi_positions = self.calculate_slide_positions(roi_h, roi_w, slide_rows, slide_cols, overlap_pixels)
-
-                    # 对每个窗口执行推理
-                    slide_tasks = []
-                    for pos in roi_positions:
-                        slide_tasks.append((roi_img, pos, x1, y1, threshold))
-                else:
-                    # 无region配置，对整张图片滑窗
-                    slide_tasks = []
-                    for pos in positions:
-                        slide_tasks.append((img, pos, 0, 0, threshold))
+                # 对整张图片滑窗
+                slide_tasks = []
+                for pos in positions:
+                    slide_tasks.append((masked_img, pos, threshold))
 
                 # 并行执行推理
-                for window_img, pos, region_offset_x, region_offset_y, thr in slide_tasks:
+                for window_img, pos, thr in slide_tasks:
                     roi = pos['roi']
 
                     # 提取窗口（含外扩处理）
@@ -593,17 +523,13 @@ class ImageDefectHandler(tornado.web.RequestHandler):
                     results = await tornado.ioloop.IOLoop.current().run_in_executor(
                         self.executor,
                         self.run_yolo_inference,
-                        window
+                        window,
+                        self.imgsz
                     )
 
                     # 映射坐标回原图
-                    # 注意：offset需要加上区域偏移
-                    adjusted_offset = (offset[0] + region_offset_y, offset[1] + region_offset_x)
-                    adjusted_roi = (roi[0] + region_offset_y, roi[1] + region_offset_x,
-                                   roi[2] + region_offset_y, roi[3] + region_offset_x)
-
                     detections = self.map_boxes_to_original(
-                        results, adjusted_offset, adjusted_roi, border_expand, img.shape
+                        results, offset, roi, border_expand, img.shape
                     )
 
                     # 过滤置信度低于阈值的检测结果
@@ -695,7 +621,7 @@ class ImageDefectHandler(tornado.web.RequestHandler):
 
 
 
-def make_app(template_dir, mask_dir, config_path, port=30016):
+def make_app(template_dir, mask_dir, config_path):
     return tornado.web.Application([
         (r"/industry/image_defect", ImageDefectHandler, 
          {"template_dir": template_dir, "mask_dir": mask_dir, "config_path": config_path}),
@@ -711,8 +637,12 @@ if __name__ == "__main__":
     os.makedirs(mask_dir, exist_ok=True)
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     
-    port = 8002
-    app = make_app(template_dir, mask_dir, config_path, port)
+    # 从配置文件读取端口号，未配置则默认8000
+    with open(config_path, "r", encoding="utf-8") as f:
+        server_config = json.load(f)
+    port = int(server_config.get("port", 8000))
+    
+    app = make_app(template_dir, mask_dir, config_path)
     app.listen(port)
     logger.info(f"Server is running on port {port}")
     logger.info(f"Template directory: {os.path.abspath(template_dir)}")
