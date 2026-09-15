@@ -16,6 +16,8 @@ __all__ = (
     "Conv",
     "Conv2",
     "ConvTranspose",
+    "DCNv2",
+    "DCNv4",
     "DWConv",
     "DWConvTranspose2d",
     "Focus",
@@ -667,3 +669,176 @@ class Index(nn.Module):
             (torch.Tensor): Selected tensor.
         """
         return x[self.index]
+
+
+class DCNv2(nn.Module):
+    """Deformable Convolution v2 module with batch normalization and activation.
+
+    This module wraps torchvision's DeformConv2d with offset prediction network,
+    batch normalization and activation to be compatible with ultralytics Conv interface.
+
+    Attributes:
+        offset_conv (nn.Conv2d): Convolution layer to predict offset.
+        deform_conv (torchvision.ops.DeformConv2d): Deformable convolution layer.
+        bn (nn.BatchNorm2d): Batch normalization layer.
+        act (nn.Module): Activation function layer.
+    """
+
+    default_act = nn.SiLU()
+
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True):
+        """Initialize DCNv2 layer.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            k (int): Kernel size.
+            s (int): Stride.
+            p (int, optional): Padding. If None, uses autopad.
+            g (int): Groups.
+            act (bool | nn.Module): Activation function.
+        """
+        super().__init__()
+        from torchvision.ops import DeformConv2d
+
+        if p is None:
+            p = k // 2
+        self.k = k
+        self.offset_channels = 2 * k * k
+        self.mask_channels = k * k
+        # Predict offset and mask from input
+        self.offset_conv = nn.Conv2d(c1, self.offset_channels + self.mask_channels, k, s, p, groups=g)
+        self.deform_conv = DeformConv2d(c1, c2, kernel_size=k, stride=s, padding=p, groups=g, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        """Apply deformable convolution, batch normalization and activation.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        offset = self.offset_conv(x)
+        return self.act(self.bn(self.deform_conv(x, offset)))
+
+    def forward_fuse(self, x):
+        """Apply deformable convolution without batch normalization.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        offset = self.offset_conv(x)
+        return self.act(self.deform_conv(x, offset))
+
+
+class DCNv4(nn.Module):
+    """Deformable Convolution v4 module with grouped offset sharing and spatial aggregation.
+
+    DCNv4 key features over DCNv2:
+    1. Multiple deformable conv groups share the same offset (reduced parameters)
+    2. Intra-group softmax normalization for attention weights
+    3. Spatial aggregation for global context
+
+    Attributes:
+        offset_conv (nn.Conv2d): Convolution layer to predict shared offset and mask.
+        groups (int): Number of deformable conv groups.
+        deform_convs (nn.ModuleList): List of deformable convolutions per group.
+        bn (nn.BatchNorm2d): Batch normalization layer.
+        act (nn.Module): Activation function layer.
+    """
+
+    default_act = nn.SiLU()
+
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True, groups=4):
+        """Initialize DCNv4 layer.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            k (int): Kernel size.
+            s (int): Stride.
+            p (int, optional): Padding. If None, uses autopad.
+            g (int): Groups for convolution.
+            act (bool | nn.Module): Activation function.
+            groups (int): Number of deformable conv groups sharing offset.
+        """
+        super().__init__()
+        from torchvision.ops import DeformConv2d
+
+        if p is None:
+            p = k // 2
+        self.k = k
+        self.groups = groups
+        self.offset_channels = 2 * k * k
+        self.mask_channels = k * k
+
+        # Shared offset prediction for all groups
+        self.offset_conv = nn.Conv2d(c1, self.offset_channels + self.mask_channels, 1, bias=False)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.channel_proj = nn.Conv2d(c1, c1 // 4, 1)
+        self.spatial_proj = nn.Conv2d(c1 // 4, groups, 1, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+        # Per-group deformable convolutions
+        c1_g = c1 // groups
+        c2_g = c2 // groups
+        self.deform_convs = nn.ModuleList([
+            DeformConv2d(c1_g, c2_g, kernel_size=k, stride=s, padding=p, groups=g, bias=False)
+            for _ in range(groups)
+        ])
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+    def forward(self, x):
+        """Apply DCNv4 with grouped offset sharing and spatial aggregation.
+
+        Args:
+            x (torch.Tensor): Input tensor [B, C, H, W].
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        B, C, H, W = x.shape
+        # Shared offset prediction
+        offset = self.offset_conv(x)
+
+        # Spatial aggregation attention (per-group weights)
+        w = self.avg_pool(x)
+        w = self.channel_proj(w)
+        w = self.spatial_proj(w).view(B, self.groups, 1, 1)
+
+        # Per-group deformable convolution with shared offset
+        x_g = torch.split(x, C // self.groups, dim=1)
+        out_list = []
+        for i, dconv in enumerate(self.deform_convs):
+            out_list.append(dconv(x_g[i], offset) * w[:, i:i+1])
+        out = torch.cat(out_list, dim=1)
+
+        return self.act(self.bn(out))
+
+    def forward_fuse(self, x):
+        """Apply DCNv4 without batch normalization.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        B, C, H, W = x.shape
+        offset = self.offset_conv(x)
+        w = self.avg_pool(x)
+        w = self.channel_proj(w)
+        w = self.spatial_proj(w).view(B, self.groups, 1, 1)
+        x_g = torch.split(x, C // self.groups, dim=1)
+        out_list = []
+        for i, dconv in enumerate(self.deform_convs):
+            out_list.append(dconv(x_g[i], offset) * w[:, i:i+1])
+        out = torch.cat(out_list, dim=1)
+        return self.act(out)

@@ -67,6 +67,8 @@ from .conv import (
     Conv,
     Conv2,
     ConvTranspose,
+    DCNv2,
+    DCNv4,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -107,6 +109,8 @@ from .transformer import (
     TransformerLayer,
 )
 
+from .cpa_arch import CPA_arch
+
 __all__ = (
     "AIFI",
     "C1",
@@ -116,6 +120,8 @@ __all__ = (
     "C3TR",
     "CBAM",
     "CIB",
+    "DCNv2",
+    "DCNv4",
     "DFL",
     "ELAN1",
     "MLP",
@@ -189,4 +195,5 @@ __all__ = (
     "YOLOESegment",
     "YOLOESegment26",
     "v10Detect",
+    "CPA_arch",
 )

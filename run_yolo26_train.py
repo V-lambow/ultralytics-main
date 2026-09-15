@@ -43,6 +43,7 @@ def main():
 
     model = YOLO(args.model)
     results = model.train(
+        deterministic=False,
         data=args.data,
         epochs=args.epochs,
         batch=args.batch,

@@ -18,6 +18,8 @@ from ultralytics.nn.modules import (
     C2PSA,
     C3,
     C3TR,
+    DCNv2,
+    DCNv4,
     ELAN1,
     OBB,
     OBB26,
@@ -73,6 +75,7 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
+    CPA_arch,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -1890,6 +1893,8 @@ def parse_model(d, ch, verbose=True):
             Classify,
             Conv,
             ConvTranspose,
+            DCNv2,
+            DCNv4,
             GhostConv,
             Bottleneck,
             GhostBottleneck,
@@ -2032,6 +2037,9 @@ def parse_model(d, ch, verbose=True):
             c2 = args[0]
             c1 = ch[f]
             args = [*args[1:]]
+        elif m is CPA_arch:
+            c2 = ch[f]
+            args = [ch[f], ch[f], 4]
         else:
             c2 = ch[f]
 
