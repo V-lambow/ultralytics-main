@@ -26,7 +26,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-requirements.txt
 !examples/**/requirements.txt
 setup.py
 ultralytics.egg-info
@@ -151,6 +150,7 @@ dmypy.json
 # datasets and projects (ignore /datasets dir at root only to allow for docs/en/datasets dir)
 /datasets
 runs/
+output/
 wandb/
 .DS_Store
 
@@ -184,22 +184,7 @@ pnnx*
 calibration_*.npy
 
 # Videos and Pictures
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.webm
-*.jpg
-*.jpeg
-*.png
-*.bmp
-*.tiff
-*.gif
-*.svg
-*.webp
-*.heic
-*.ico
-*.raw
+
 *.exe
 
 # Training logs
