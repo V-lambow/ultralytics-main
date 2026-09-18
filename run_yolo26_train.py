@@ -8,14 +8,14 @@ def main():
     default_device = "0" if use_cuda else "cpu"
 
     parser = argparse.ArgumentParser(description="YOLO26 Training Script")
-    parser.add_argument("--model", type=str, default="./models/yolo26m.pt", help="model name e.g. yolo26n.pt, yolo26s.pt, yolo26m.pt, yolo26l.pt, yolo26x.pt")
+    parser.add_argument("--model", type=str, default="./models/yolov8m.pt", help="model name e.g. yolo26n.pt, yolo26s.pt, yolo26m.pt, yolo26l.pt, yolo26x.pt")
     parser.add_argument("--data", type=str, default="coco8.yaml", help="dataset config e.g. coco8.yaml, coco.yaml, visdrone.yaml")
     parser.add_argument("--epochs", type=int, default=100, help="number of training epochs")
     parser.add_argument("--batch", type=int, default=16, help="batch size")
     parser.add_argument("--imgsz", type=int, default=640, help="image size")
     parser.add_argument("--device", type=str, default=default_device, help="device: 0, cpu, or 0,1,2,3")
     parser.add_argument("--workers", type=int, default=8, help="dataloader workers")
-    parser.add_argument("--project", type=str, default="runs/detect", help="save results to project/name")
+    parser.add_argument("--project", type=str, default="", help="save results to project/name")
     parser.add_argument("--name", type=str, default="train", help="save results to project/name")
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     parser.add_argument("--pretrained", type=str, default="True", help="use pretrained weights")
@@ -73,3 +73,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+##python run_yolo26_train.py --model ./yolov8m-cpa.yaml --data coco8.yaml --imgsz 640 --batch 8 --epochs 400 --name coco8
