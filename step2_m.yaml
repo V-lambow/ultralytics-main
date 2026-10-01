@@ -4,7 +4,7 @@
 path: D:\dataset\shimada\step2
 train: m/train/images
 val: m/val/images
-test: 
+test:
 
 # Classes
 names:
