@@ -14,7 +14,7 @@ requests>=2.23.0              # 2.33.0 ✓
 filelock>=3.16.1              # 3.29.0 ✓
 psutil>=5.8.0                 # 7.2.2 ✓
 polars>=0.20.0                # 1.42.1 ✓
-nvidia-ml-py>=12.0.0          # 13.610.43 ✓
+nvidia-ml-py>=13.615.71          # 13.610.43 ✓
 ultralytics-thop>=2.0.18      # 2.0.20 ✓
 
 # === Export dependencies ===
