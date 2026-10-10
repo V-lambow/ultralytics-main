@@ -204,6 +204,7 @@ CFG_FLOAT_KEYS = frozenset(
         "time",
         "workspace",
         "batch",
+        "curb_kappa",
     }
 )
 CFG_FRACTION_KEYS = frozenset(
@@ -232,6 +233,7 @@ CFG_FRACTION_KEYS = frozenset(
         "iou",
         "fraction",
         "multi_scale",
+        "curb_ema",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -247,6 +249,8 @@ CFG_INT_KEYS = frozenset(
         "line_width",
         "nbs",
         "save_period",
+        "curb_interval",
+        "curb_stall",
     }
 )
 CFG_INT_MIN = {  # minimum valid values for integer arguments used as divisors, sizes or seeds
@@ -255,6 +259,8 @@ CFG_INT_MIN = {  # minimum valid values for integer arguments used as divisors, 
     "mask_ratio": 1,
     "vid_stride": 1,
     "seed": 0,
+    "curb_interval": 1,
+    "curb_stall": 1,
 }
 CFG_BOOL_KEYS = frozenset(
     {  # boolean-only arguments
@@ -290,6 +296,7 @@ CFG_BOOL_KEYS = frozenset(
         "profile",
         "end2end",
         "cls_remap",
+        "curb",
     }
 )
 CFG_STR_KEYS = frozenset({"optimizer", "split", "copy_paste_mode", "auto_augment"})

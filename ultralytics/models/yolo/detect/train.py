@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
+from ultralytics.data.curb import CurbSampler, curb_on_fit_epoch_end
 from ultralytics.engine.trainer import BaseTrainer
 from ultralytics.models import yolo
 from ultralytics.nn.tasks import DetectionModel
@@ -61,6 +62,18 @@ class DetectionTrainer(BaseTrainer):
             _callbacks (dict, optional): Dictionary of callback functions to be executed during training.
         """
         super().__init__(cfg, overrides, _callbacks)
+        self._curb = None  # CURB sampling state, populated below when enabled
+        if getattr(self.args, "curb", False):
+            if self.args.task != "detect":
+                LOGGER.warning(f"CURB sampling supports task='detect' only; disabled for task='{self.args.task}'")
+            else:
+                assert self.args.curb_kappa > 0, "curb_kappa must be > 0"
+                self._curb = {"d": None, "mu": None, "stall": None, "sampler": None}
+                self.add_callback("on_fit_epoch_end", curb_on_fit_epoch_end)
+                for f in ("curb.csv", "curb_review.txt"):
+                    path = self.save_dir / f
+                    if path.exists() and not self.args.resume:
+                        path.unlink()
 
     def build_dataset(self, img_path: str, mode: str = "train", batch: int | None = None):
         """Build YOLO Dataset for training or validation.
@@ -95,6 +108,12 @@ class DetectionTrainer(BaseTrainer):
         if getattr(dataset, "rect", False) and shuffle and not np.all(dataset.batch_shapes == dataset.batch_shapes[0]):
             LOGGER.warning("'rect=True' is incompatible with DataLoader shuffle, setting shuffle=False")
             shuffle = False
+        sampler = None
+        if mode == "train" and self._curb is not None:
+            assert rank == -1, "CURB sampling requires single-process training (RANK=-1); DDP is not supported"
+            if self._curb["sampler"] is None:
+                self._curb["sampler"] = CurbSampler(len(dataset))
+            sampler = self._curb["sampler"]
         return build_dataloader(
             dataset,
             batch=batch_size,
@@ -102,6 +121,7 @@ class DetectionTrainer(BaseTrainer):
             shuffle=shuffle,
             rank=rank,
             drop_last=self.args.compile and mode == "train",
+            sampler=sampler,
         )
 
     def preprocess_batch(self, batch: dict) -> dict:
