@@ -40,6 +40,13 @@ freeze: # (int | list, optional) freeze first N layers (int) or specific layer i
 multi_scale: 0.0 # (float) multi-scale range as a fraction of imgsz; sizes are rounded to stride multiples
 compile: False # (bool | str) enable torch.compile() backend='inductor'; True="default", False=off, or "default|reduce-overhead|max-autotune-no-cudagraphs"
 
+# Curriculum resampling (CURB)
+curb: False # (bool) difficulty-based train-set resampling with a fixed per-epoch draw budget (detect only)
+curb_interval: 25 # (int) epochs between CURB difficulty refreshes
+curb_kappa: 2.0 # (float) CURB per-class exposure cap as a multiple of uniform exposure
+curb_ema: 0.3 # (float) CURB EMA weight on the newest difficulty observation
+curb_stall: 3 # (int) CURB refreshes without class difficulty improvement before stop-loss
+
 # Segmentation
 overlap_mask: True # (bool) merge instance masks into one mask during training (segment only)
 mask_ratio: 4 # (int) mask downsample ratio (segment only)
