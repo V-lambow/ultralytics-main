@@ -3,6 +3,7 @@ import json
 import logging
 import signal
 import sys
+from multiprocessing import freeze_support
 
 import zmq
 
@@ -116,4 +117,5 @@ def main():
 
 
 if __name__ == "__main__":
+    freeze_support()
     main()
