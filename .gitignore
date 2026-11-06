@@ -195,3 +195,7 @@ results.csv
 
 # CI test asset cache
 .ultralytics_cache/
+
+# Ultralytics runtime state
+/ultralytics/settings.json
+/ultralytics/persistent_cache.json
