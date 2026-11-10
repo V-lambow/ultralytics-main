@@ -1,0 +1,17 @@
+{
+  "train": {
+    "model": "E:/m_code/ultralytics-main/yolo26n.pt",
+    "data": "E:/datasets/curb/data.yaml",
+    "epochs": 100,
+    "batch": 16,
+    "imgsz": 640,
+    "device": "auto",
+    "task": "detect",
+    "project": "E:/m_code/ultralytics-main/train-JSONservice/output",
+    "name": "curb_v1",
+    "exist_ok": true,
+    "workers": 4,
+    "useRoi": false,
+    "roi": { "x": 640, "y": 320, "width": 1280, "height": 720 }
+  }
+}
