@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import multiprocessing
 import re
 import signal
 import sys
@@ -13,6 +14,7 @@ from protocol import (
     SERVICE_ONLY_ARGS,
     TERMINAL_EVENTS,
     TRAIN_ARGS_ALLOWED,
+    emit,
 )
 
 ANSI_RE = re.compile(r"\x1B(?:[@-Z\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -105,7 +107,10 @@ def run_training(train_cfg, resume):
         if event in TERMINAL_EVENTS:
             outcome["event"] = event
 
-    manager = TrainingManager(callbacks=[print_event, track])
+    def forward(event, data):
+        emit(event, **data)
+
+    manager = TrainingManager(callbacks=[print_event, forward, track])
     started, message = manager.start_training(train_args)
     if not started:
         print(f"[ERROR] {message}", file=sys.stderr)
@@ -167,4 +172,11 @@ def main():
 
 
 if __name__ == "__main__":
+    from multiprocessing.spawn import is_forking
+
+    if is_forking(sys.argv):
+        from worker import install_gray_shim
+
+        install_gray_shim()
+    multiprocessing.freeze_support()
     sys.exit(main())

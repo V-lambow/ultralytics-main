@@ -48,9 +48,11 @@ def resolve_device(device):
 
 def build_roi_trainer(train_args):
     use_roi = train_args.pop("useRoi", False)
-    roi_cfg = train_args.pop("roi", None) or {}
-    if not use_roi or not any(roi_cfg.get(key) for key in ("x", "y", "width", "height")):
+    roi_cfg = train_args.pop("roi", None)
+    if not use_roi:
         return None
+    if not roi_cfg:
+        raise ValueError("ROI is required when useRoi is true")
 
     required = ("x", "y", "width", "height")
     missing = [key for key in required if key not in roi_cfg]
