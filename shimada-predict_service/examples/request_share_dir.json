@@ -1,0 +1,12 @@
+{
+    "job_id": "J20261119103015999",
+    "sample_id": "S00001",
+    "pose_id": "P01",
+    "file_names": [
+        "S00001_C01_P01_L0_20261119103015.jpg"
+    ],
+    "relative_dir": "2021111093056/Original/S00001/",
+    "ext_params": {
+        "client": "shimada-test-client"
+    }
+}

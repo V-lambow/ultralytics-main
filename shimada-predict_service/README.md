@@ -2,7 +2,7 @@
 
 依据《软件算法通讯协议》实现的 **HTTP + JSON 缺陷检测推理服务**，以及配套的 **独立测试客户端**。两个程序完全自包含、互不依赖，可单独拷贝分发。
 
-- `server.py` — 服务端。实现 `/image_defect` 推理接口，支持 base64 传图与共享盘路径传图两种方式；默认内置 mock 推理引擎（零模型依赖），可通过 `--model` 切换为 ultralytics YOLO 真实推理。
+- `server.py` — 服务端。实现 `/image_defect` 推理接口，支持 base64 传图与共享盘路径传图两种方式；启动时读取工作目录下的 `config.json`，`model` 为 `null` 时用内置 mock 引擎（零模型依赖），填了权重路径则切换为 ultralytics YOLO 真实推理。
 - `client.py` — 测试客户端。生成测试图、发送两种协议请求、自动验证全部错误码。
 
 使用方法见 [USAGE.md](USAGE.md)，本文档描述完整代码逻辑。
@@ -146,7 +146,7 @@ Content-Length: 418
  "ext_params": {"client": "shimada-test-client"}}
 ```
 
-**共享盘方式请求**：body 中去掉 `images_base64`，换成 `"relative_dir": "2021111093056/Original/S00001/"`（相对服务端 `--share-root`）。
+**共享盘方式请求**：body 中去掉 `images_base64`，换成 `"relative_dir": "2021111093056/Original/S00001/"`（相对服务端 `config.json` 的 `share_root`）。
 
 **成功响应（error_code = 0）：**
 
@@ -199,8 +199,10 @@ Connection: close
 | `pose_id` | string | 建议 | 位姿编号；缺省时响应回传 `""` |
 | `file_names` | string[] | 是 | 非空数组；每个元素仅是文件名（不含路径），需匹配白名单 `^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$`（忽略大小写）；响应中按请求顺序回传 |
 | `images_base64` | string[] | 二选一 | 与 `file_names` **等长且一一对应**；标准 Base64 文本（建议含 padding）；空串按 -1004 处理 |
-| `relative_dir` | string | 二选一 | 相对服务端 `--share-root` 的目录，含 `..` 越界 → -1003；与 `images_base64` 互斥，并存 → -1002，均缺 → -1002 |
+| `relative_dir` | string | 二选一 | 相对服务端 `share_root` 的目录，含 `..` 越界 → -1003；与 `images_base64` 互斥，并存 → -1002，均缺 → -1002 |
 | `ext_params` | object | 否 | 业务扩展参数，服务端不解析、不回传 |
+
+两种传图方式的完整报文示例见 [`examples/request_base64.json`](examples/request_base64.json) 与 [`examples/request_share_dir.json`](examples/request_share_dir.json)（示例仅用于对照字段，运行时不读取）。
 
 ### 1.5 响应字段说明
 
@@ -236,6 +238,8 @@ results 条目：
 | `box` | int[4] | `[左顶点X, 左顶点Y, 右顶点X, 右顶点Y]` 像素坐标（即 x1,y1,x2,y2） |
 | `polygon` / `defect_raw` | array | 恒空（预留，分割模型可填） |
 
+成功与失败响应的完整示例见 [`examples/response_success.json`](examples/response_success.json) 与 [`examples/response_failure.json`](examples/response_failure.json)。
+
 ### 1.6 交互规则清单
 
 | 规则 | 细节 |
@@ -256,10 +260,10 @@ results 条目：
 |---|---|---|---|
 | 服务未启动 / 地址端口错 | 不存在 | `URLError: connection failed`（client.py），HTTP 状态显示 N/A；C# 侧 `HttpRequestException` / `WebException` | 启动服务、核对地址与防火墙 |
 | 客户端超时早于响应 | 推理照常完成，响应发往已断开的连接后被丢弃 | socket timeout / `TaskCanceledException` | 调大 timeout，或用 `X-Process-Ms` 与服务端日志比对定位耗时 |
-| 请求路径错 | 404 + -1002，连接关闭 | HTTPError / `HttpStatusCode.NotFound`，**body 仍是 JSON 可解析** | 核对 URL 与 `--endpoint` |
+| 请求路径错 | 404 + -1002，连接关闭 | HTTPError / `HttpStatusCode.NotFound`，**body 仍是 JSON 可解析** | 核对 URL 与 `config.json` 的 `endpoint` |
 | 请求体超限 / chunked | 不读 body，直接 200 + -1002，连接关闭 | `error_code=-1002`（invalid content length） | 压缩图片或调 `kMaxBodyBytes` |
 | JSON / UTF-8 非法 | 200 + -1002 | `error_code=-1002` | 检查序列化（勿手动拼 JSON 字符串） |
-| 图片数据问题 | 200 + -1004 | `error_code=-1004` | base64：核对编码与完整性；共享盘：核对服务端 `--share-root` 与落盘完成状态 |
+| 图片数据问题 | 200 + -1004 | `error_code=-1004` | base64：核对编码与完整性；共享盘：核对服务端 `share_root` 与落盘完成状态 |
 | 推理异常 | 200 + -1001，日志 [ERROR] | `error_code=-1001` | 看服务端日志定位（模型缺失、显存不足等） |
 | 服务端被 Ctrl+C | 监听关闭，在途请求响应丢失 | connection failed / 中断 | 客户端重试；产线建议由进程管理器守护 |
 
@@ -269,12 +273,18 @@ results 条目：
 
 ```
 shimada-predict_service/
-├── server.py        # 服务端程序（接口 + mock/YOLO 推理引擎）
+├── server.py        # 服务端程序（接口 + mock/YOLO 推理引擎 + config.json 加载）
 ├── client.py        # 测试客户端程序（生成图 / 两种请求 / 错误码用例）
+├── config.json      # 服务端唯一配置来源（工作目录下读取，无命令行参数）
+├── examples/        # 报文示例（仅文档用途，运行时不读取）
+│   ├── request_base64.json     # 请求：base64 传图
+│   ├── request_share_dir.json  # 请求：共享盘传图
+│   ├── response_success.json   # 响应：error_code = 0
+│   └── response_failure.json   # 响应：error_code ≠ 0
 ├── requirements.txt # 依赖清单
 ├── README.md        # 本文档：完整代码逻辑
 ├── USAGE.md         # 使用手册
-├── shared/          # 服务端共享盘根目录（启动时自动创建，--share-root 可改）
+├── shared/          # 服务端共享盘根目录（启动时自动创建，share_root 可改）
 │   └── demo/        # 测试用相对目录（由客户端 gen-images 生成）
 └── test_images/     # 客户端生成的本地测试图（gen-images 默认输出）
 ```
@@ -299,7 +309,7 @@ shimada-predict_service/
 ```
 
 - 服务端线程模型：`ThreadingHTTPServer` 为每个连接开一个线程；**推理由全局锁 `g_inferLock` 串行化**（YOLO 模型非线程安全，且产线推理通常单卡）。
-- 服务端全局状态：`g_config`（argparse 配置）、`g_engine`（推理引擎实例）、`g_inferLock`。
+- 服务端全局状态：`g_config`（`config.json` 解析结果）、`g_engine`（推理引擎实例）、`g_inferLock`。
 
 ---
 
@@ -327,7 +337,7 @@ shimada-predict_service/
 - 每张图生成 1~3 个随机矩形缺陷：类别从 `["ZM", "HS", "QJ", "WS"]` 中选（按业务自行替换），`score` ∈ [0.3, 0.99]，框尺寸受图片分辨率约束（宽高各不超过 1/6），`area = w*h`、`length = max(w, h)`、`volume = area`（mock 占位值）。
 - `polygon / defect_raw` 返回空数组，与协议示例一致。
 
-**YoloEngine（`--model` 指定时）**
+**YoloEngine（`model` 非 null 时）**
 
 - 构造时 `from ultralytics import YOLO` 并加载权重（延迟导入，mock 模式无需安装 ultralytics）。
 - `predict` 中 `cv2.imdecode(np.frombuffer(bytes), IMREAD_COLOR)` 将请求体图片字节解码为 BGR ndarray，交给 `model.predict(img, device, conf, verbose=False)`。
@@ -391,11 +401,13 @@ do_POST
 
 ### 4.5 启动流程（`main`）
 
-1. `parseArgs` 解析 `--host/--port/--endpoint/--model/--device/--conf/--share-root`。
-2. 有 `--model` → 构造 `YoloEngine`（此时才 import ultralytics 并加载权重）；否则 `MockEngine`。
-3. `os.makedirs(shareRoot, exist_ok=True)` 保证共享根存在。
-4. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，打印 endpoint / mode / share root 三行配置。
+1. `loadConfig` 从**工作目录**读取 `config.json`（`os.getcwd()`），用 `kDefaultConfig` 补齐缺省键，校验未知键与各字段类型/范围；任一项不合法即打印原因并以退出码 1 结束，**端口不会被打开**。
+2. `model` 非 null → 构造 `YoloEngine`（此时才 import ultralytics 并加载权重）；`model` 为 null → `MockEngine`。
+3. `os.makedirs(share_root, exist_ok=True)` 保证共享根存在。
+4. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，打印 config / endpoint / mode / share root 四行配置。
 5. `serve_forever()`；`Ctrl+C` 优雅退出（`server_close()`）。
+
+配置在启动时读一次，运行期不重读：改 `model / host / port / endpoint / share_root` 都必须重启服务才生效，请求里也没有任何字段能覆盖它们。
 
 ---
 
@@ -431,7 +443,7 @@ PIL 在深灰底上撒 150 个随机灰度小方块（噪声纹理）+ 一个红
 |---|---|
 | `gen-images` | `makeTestImage` × count 张，按协议命名风格 `{sampleId}_C01_{poseId}_L{i}_{时间戳}.jpg` 写入 `--out` 目录并打印绝对路径 |
 | `send-base64` | 有 `--images` 读文件；无则内存生成一张 1920×1440 测试图（开箱即测）。构造 payload → `postJson` → `printResult` |
-| `send-path` | 用 `--dir` + `--files` 构造共享盘 payload → `postJson` → `printResult`。要求文件已存在于服务端 `--share-root` 下（先 gen-images 到共享目录，见 USAGE §5） |
+| `send-path` | 用 `--dir` + `--files` 构造共享盘 payload → `postJson` → `printResult`。要求文件已存在于服务端 `share_root` 下（先 gen-images 到共享目录，见 USAGE §5） |
 | `test-errors` | 13 个用例自动跑（见下表），每例打印 `[PASS]/[FAIL] expected=... actual=...`，汇总后以进程退出码 0/1 表示全部通过与否 |
 
 `test-errors` 用例表：
@@ -466,5 +478,5 @@ PIL 在深灰底上撒 150 个随机灰度小方块（噪声纹理）+ 一个红
 | 多边形输出 | 协议 `polygon` 字段；在引擎里把分割 mask 轮廓坐标填入即可，服务端其余逻辑不动 |
 | mock 类别 | `MockEngine.kDefectCodes` |
 | 并发推理 | 当前 `g_inferLock` 全局串行；多卡部署可为每卡建独立引擎+锁，或换推理批处理队列 |
-| 接口路径/端口 | 全部是服务端启动参数，无需改代码 |
+| 接口路径/端口 | 全部在 `config.json` 中配置，无需改代码 |
 | HTTPS / 鉴权 | 协议声明"HTTP 头部无特殊校验逻辑"，如需在标准库 `ThreadingHTTPServer` 外再套 Nginx 反代加 TLS 即可，服务端不用改 |

@@ -1,4 +1,3 @@
-import argparse
 import base64
 import binascii
 import hashlib
@@ -28,6 +27,17 @@ kErrorMsg = {
 kMaxBodyBytes = 256 * 1024 * 1024
 kImageNamePattern = re.compile(r"^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$", re.IGNORECASE)
 kHandlerTimeoutSec = 300
+kConfigFileName = "config.json"
+
+kDefaultConfig = {
+    "host": "127.0.0.1",
+    "port": 9000,
+    "endpoint": "/image_defect",
+    "model": None,
+    "device": None,
+    "conf": 0.25,
+    "share_root": "./shared",
+}
 
 g_config = None
 g_engine = None
@@ -159,7 +169,7 @@ def loadImages(req):
                 return None, kImageNotFound
             loaded.append((name, data))
     else:
-        shareRoot = os.path.abspath(g_config.shareRoot)
+        shareRoot = os.path.abspath(g_config.share_root)
         for name in fileNames:
             fullPath = os.path.abspath(os.path.join(shareRoot, req["relative_dir"], name))
             try:
@@ -276,34 +286,74 @@ class DefectHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def parseArgs():
-    parser = argparse.ArgumentParser(description="Shimada image defect predict service (JSON over HTTP)")
-    parser.add_argument("--host", default="127.0.0.1", help="bind address, default 127.0.0.1")
-    parser.add_argument("--port", type=int, default=9000, help="listen port, default 9000")
-    parser.add_argument("--endpoint", default="/image_defect", help="service path, default /image_defect")
-    parser.add_argument("--model", default=None, help="ultralytics *.pt weights; omit to run mock inference")
-    parser.add_argument("--device", default=None, help="inference device, e.g. cpu or 0")
-    parser.add_argument("--conf", type=float, default=0.25, help="confidence threshold in yolo mode")
-    parser.add_argument("--share-root", dest="shareRoot", default="./shared",
-                        help="root dir of the shared image folder, default ./shared")
-    return parser.parse_args()
+class Config:
+    def __init__(self, host, port, endpoint, model, device, conf, share_root):
+        self.host = host
+        self.port = port
+        self.endpoint = endpoint
+        self.model = model
+        self.device = device
+        self.conf = conf
+        self.share_root = share_root
+
+
+def loadConfig():
+    path = os.path.join(os.getcwd(), kConfigFileName)
+    try:
+        with open(path, "rb") as f:
+            raw = json.loads(f.read().decode("utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(f"config file not found: {path}")
+    except OSError as exc:
+        raise SystemExit(f"cannot read config file {path}: {exc}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"config file {path} is not valid utf-8 json: {exc}")
+    if not isinstance(raw, dict):
+        raise SystemExit(f"config file {path} must be a json object")
+    unknown = sorted(set(raw) - set(kDefaultConfig))
+    if unknown:
+        raise SystemExit(f"config file {path} has unknown keys {unknown}, allowed: {sorted(kDefaultConfig)}")
+    cfg = {**kDefaultConfig, **raw}
+    host = cfg["host"]
+    if not isinstance(host, str) or not host.strip():
+        raise SystemExit(f"config file {path}: host must be a non-empty string")
+    port = cfg["port"]
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise SystemExit(f"config file {path}: port must be an integer in 1..65535")
+    endpoint = cfg["endpoint"]
+    if not isinstance(endpoint, str) or not endpoint.startswith("/") or any(c.isspace() for c in endpoint):
+        raise SystemExit(f"config file {path}: endpoint must start with '/' and contain no whitespace")
+    model = cfg["model"]
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise SystemExit(f"config file {path}: model must be null or a non-empty string")
+    device = cfg["device"]
+    if device is not None and (isinstance(device, bool) or not isinstance(device, (str, int))):
+        raise SystemExit(f"config file {path}: device must be null, a string or an integer")
+    conf = cfg["conf"]
+    if isinstance(conf, bool) or not isinstance(conf, (int, float)) or not 0.0 <= conf <= 1.0:
+        raise SystemExit(f"config file {path}: conf must be a number in 0..1")
+    shareRoot = cfg["share_root"]
+    if not isinstance(shareRoot, str) or not shareRoot.strip():
+        raise SystemExit(f"config file {path}: share_root must be a non-empty string")
+    return Config(host, port, endpoint, model, device, conf, shareRoot)
 
 
 def main():
     global g_config, g_engine
-    g_config = parseArgs()
+    g_config = loadConfig()
     if g_config.model:
         g_engine = YoloEngine(g_config.model, g_config.device, g_config.conf)
         mode = f"yolo({g_config.model})"
     else:
         g_engine = MockEngine()
         mode = "mock"
-    os.makedirs(g_config.shareRoot, exist_ok=True)
+    os.makedirs(g_config.share_root, exist_ok=True)
     httpd = ThreadingHTTPServer((g_config.host, g_config.port), DefectHandler)
     print("ShimadaPredictService started")
+    print(f"  config     : {os.path.join(os.getcwd(), kConfigFileName)}")
     print(f"  endpoint   : http://{g_config.host}:{g_config.port}{g_config.endpoint}")
     print(f"  mode       : {mode}")
-    print(f"  share root : {os.path.abspath(g_config.shareRoot)}")
+    print(f"  share root : {os.path.abspath(g_config.share_root)}")
     print("Press Ctrl+C to stop.", flush=True)
     try:
         httpd.serve_forever()
