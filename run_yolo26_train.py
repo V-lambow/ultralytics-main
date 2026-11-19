@@ -46,6 +46,10 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="random seed")
     parser.add_argument("--cos-lr", action="store_true", help="cosine learning rate scheduler")
     parser.add_argument("--close-mosaic", type=int, default=10, help="disable mosaic for final N epochs")
+    parser.add_argument("--degrees", type=float, default=0.0, help="image rotation +/- degrees")
+    parser.add_argument("--fliplr", type=float, default=0.5, help="horizontal flip probability")
+    parser.add_argument("--flipud", type=float, default=0.0, help="vertical flip probability")
+    parser.add_argument("--mosaic", type=float, default=1.0, help="mosaic augmentation probability")
     parser.add_argument(
         "--curb", action="store_true", help="enable CURB difficulty-based train resampling (detect only)"
     )
@@ -89,6 +93,10 @@ def main():
         seed=args.seed,
         cos_lr=args.cos_lr,
         close_mosaic=args.close_mosaic,
+        degrees=args.degrees,
+        fliplr=args.fliplr,
+        flipud=args.flipud,
+        mosaic=args.mosaic,
         curb=args.curb,
         curb_interval=args.curb_interval,
         curb_kappa=args.curb_kappa,
