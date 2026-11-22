@@ -28,19 +28,24 @@ kMaxBodyBytes = 256 * 1024 * 1024
 kImageNamePattern = re.compile(r"^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$", re.IGNORECASE)
 kHandlerTimeoutSec = 300
 kConfigFileName = "config.json"
+kModelAliasPattern = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+kWorkpiecePattern = re.compile(r"^\S{1,64}$")
+kDefaultModelConf = 0.25
 
 kDefaultConfig = {
     "host": "127.0.0.1",
     "port": 9000,
     "endpoint": "/image_defect",
-    "model": None,
     "device": None,
-    "conf": 0.25,
+    "models": {"default": {"path": None}},
+    "default_model": None,
+    "workpieces": {},
     "share_root": "./shared",
 }
 
 g_config = None
-g_engine = None
+g_models = {}
+g_defaultModel = None
 g_inferLock = threading.Lock()
 
 
@@ -66,6 +71,9 @@ def readImageInfo(imageBytes):
 class MockEngine:
     kDefectCodes = ["ZM", "HS", "QJ", "WS"]
 
+    def __init__(self, alias):
+        self.alias = alias
+
     def predict(self, imageBytes, fileName, imageWidth, imageHeight):
         seed = int(hashlib.md5(fileName.encode("utf-8")).hexdigest()[:8], 16)
         rng = random.Random(seed)
@@ -90,8 +98,9 @@ class MockEngine:
 
 
 class YoloEngine:
-    def __init__(self, modelPath, device, conf):
+    def __init__(self, alias, modelPath, device, conf):
         from ultralytics import YOLO
+        self.alias = alias
         self.model = YOLO(modelPath)
         self.device = device
         self.conf = conf
@@ -193,22 +202,59 @@ def loadImages(req):
     return images, kOk
 
 
+def parseWorkpiece(fileName):
+    """Return the workpiece code parsed from an image file name, or None when no rule matches.
+
+    TODO: 解析规则与型号清单均未定，先留空返回 None。
+    例：'S00001_C01_P01_L0_20261119103015.jpg' 中按约定取某一段作为型号。
+    规则确定后只改这个函数，processRequest / 配对表 / 日志都不用动。
+    """
+    return None
+
+
+def workpieceModels(workpiece):
+    """Return the engine handles configured for a workpiece code, or None when the code is not in the table."""
+    aliases = g_config.workpieces.get(workpiece) if isinstance(workpiece, str) else None
+    return None if aliases is None else [g_models[alias] for alias in aliases]
+
+
+def resolveHandles(fileNames):
+    """Return (workpiece, engine handles); fall back to default_model while parseWorkpiece returns None."""
+    workpiece = parseWorkpiece(fileNames[0])
+    if workpiece is None:
+        return None, [g_models[g_defaultModel]]
+    return workpiece, workpieceModels(workpiece)
+
+
+def selectionSummary(fileNames):
+    """Format the workpiece / model selection for the request log."""
+    if not isinstance(fileNames, list) or not fileNames or not isinstance(fileNames[0], str):
+        return "workpiece=- models=-"
+    workpiece, handles = resolveHandles(fileNames)
+    aliases = ",".join(handle.alias for handle in handles) if handles else "-"
+    return f"workpiece={workpiece or '-'} models={aliases}"
+
+
 def processRequest(req):
     startMs = time.perf_counter()
     errorCode = validateRequest(req)
     if errorCode != kOk:
         return makeError(errorCode), 0.0
+    workpiece, handles = resolveHandles(req["file_names"])
+    if handles is None:
+        return makeError(kInvalidParam, f"unknown workpiece: {workpiece}"), 0.0
     images, errorCode = loadImages(req)
     if errorCode != kOk:
         return makeError(errorCode), 0.0
     allResults = []
     firstWidth, firstHeight = 0, 0
     for name, data, width, height in images:
-        with g_inferLock:
-            defects = g_engine.predict(data, name, width, height)
-        for d in defects:
-            d["file_name"] = name
-        allResults.extend(defects)
+        for handle in handles:
+            with g_inferLock:
+                defects = handle.predict(data, name, width, height)
+            for d in defects:
+                d["file_name"] = name
+            allResults.extend(defects)
         if firstWidth == 0:
             firstWidth, firstHeight = width, height
     data = {
@@ -267,9 +313,10 @@ class DefectHandler(BaseHTTPRequestHandler):
         resp, elapsedMs = processRequest(req)
         mode = "base64" if isinstance(req, dict) and "images_base64" in req else "share_dir"
         jobInfo = req.get("job_id", "?") if isinstance(req, dict) else "?"
-        fileCount = len(req.get("file_names") or []) if isinstance(req, dict) else 0
+        fileNames = req.get("file_names") if isinstance(req, dict) else None
+        fileCount = len(fileNames or [])
         print(
-            f"[REQ] job_id={jobInfo} files={fileCount} mode={mode} "
+            f"[REQ] job_id={jobInfo} {selectionSummary(fileNames)} files={fileCount} mode={mode} "
             f"-> error_code={resp['error_code']} elapsed={elapsedMs}ms",
             flush=True,
         )
@@ -287,14 +334,64 @@ class DefectHandler(BaseHTTPRequestHandler):
 
 
 class Config:
-    def __init__(self, host, port, endpoint, model, device, conf, share_root):
+    def __init__(self, host, port, endpoint, device, models, default_model, workpieces, share_root):
         self.host = host
         self.port = port
         self.endpoint = endpoint
-        self.model = model
         self.device = device
-        self.conf = conf
+        self.models = models
+        self.default_model = default_model
+        self.workpieces = workpieces
         self.share_root = share_root
+
+
+def loadModels(path, models):
+    if not isinstance(models, dict) or not models:
+        raise SystemExit(f"config file {path}: models must be a non-empty json object of alias -> {{path, conf}}")
+    loaded = {}
+    for alias, entry in models.items():
+        if not kModelAliasPattern.match(alias):
+            raise SystemExit(f"config file {path}: model alias {alias!r} must match {kModelAliasPattern.pattern}")
+        if not isinstance(entry, dict):
+            raise SystemExit(f"config file {path}: model {alias!r} must be a json object")
+        unknown = sorted(set(entry) - {"path", "conf"})
+        if unknown:
+            raise SystemExit(
+                f"config file {path}: model {alias!r} has unknown keys {unknown}, allowed: ['conf', 'path']"
+            )
+        modelPath = entry.get("path")
+        if modelPath is not None and (not isinstance(modelPath, str) or not modelPath.strip()):
+            raise SystemExit(f"config file {path}: model {alias!r} path must be null or a non-empty string")
+        conf = entry.get("conf", kDefaultModelConf)
+        if isinstance(conf, bool) or not isinstance(conf, (int, float)) or not 0.0 <= conf <= 1.0:
+            raise SystemExit(f"config file {path}: model {alias!r} conf must be a number in 0..1")
+        loaded[alias] = {"path": modelPath, "conf": conf}
+    return loaded
+
+
+def loadWorkpieces(path, workpieces, models):
+    if not isinstance(workpieces, dict):
+        raise SystemExit(f"config file {path}: workpieces must be a json object of workpiece -> [model alias]")
+    loaded = {}
+    for workpiece, aliases in workpieces.items():
+        if not kWorkpiecePattern.match(workpiece):
+            raise SystemExit(
+                f"config file {path}: workpiece {workpiece!r} must match {kWorkpiecePattern.pattern}"
+            )
+        if not isinstance(aliases, list) or not aliases:
+            raise SystemExit(
+                f"config file {path}: workpiece {workpiece!r} must map to a non-empty json array of model aliases"
+            )
+        for alias in aliases:
+            if not isinstance(alias, str) or alias not in models:
+                raise SystemExit(
+                    f"config file {path}: workpiece {workpiece!r} references unknown model alias {alias!r}, "
+                    f"known: {sorted(models)}"
+                )
+        if len(set(aliases)) != len(aliases):
+            raise SystemExit(f"config file {path}: workpiece {workpiece!r} lists the same model alias more than once")
+        loaded[workpiece] = list(aliases)
+    return loaded
 
 
 def loadConfig():
@@ -323,36 +420,50 @@ def loadConfig():
     endpoint = cfg["endpoint"]
     if not isinstance(endpoint, str) or not endpoint.startswith("/") or any(c.isspace() for c in endpoint):
         raise SystemExit(f"config file {path}: endpoint must start with '/' and contain no whitespace")
-    model = cfg["model"]
-    if model is not None and (not isinstance(model, str) or not model.strip()):
-        raise SystemExit(f"config file {path}: model must be null or a non-empty string")
     device = cfg["device"]
     if device is not None and (isinstance(device, bool) or not isinstance(device, (str, int))):
         raise SystemExit(f"config file {path}: device must be null, a string or an integer")
-    conf = cfg["conf"]
-    if isinstance(conf, bool) or not isinstance(conf, (int, float)) or not 0.0 <= conf <= 1.0:
-        raise SystemExit(f"config file {path}: conf must be a number in 0..1")
+    models = loadModels(path, cfg["models"])
+    defaultModel = cfg["default_model"]
+    if defaultModel is None:
+        if len(models) != 1:
+            raise SystemExit(f"config file {path}: default_model is required when models has more than one entry")
+        defaultModel = next(iter(models))
+    elif not isinstance(defaultModel, str) or defaultModel not in models:
+        raise SystemExit(f"config file {path}: default_model {defaultModel!r} is not one of {sorted(models)}")
+    workpieces = loadWorkpieces(path, cfg["workpieces"], models)
     shareRoot = cfg["share_root"]
     if not isinstance(shareRoot, str) or not shareRoot.strip():
         raise SystemExit(f"config file {path}: share_root must be a non-empty string")
-    return Config(host, port, endpoint, model, device, conf, shareRoot)
+    return Config(host, port, endpoint, device, models, defaultModel, workpieces, shareRoot)
+
+
+def buildModels(config):
+    models = {}
+    for alias, entry in config.models.items():
+        if entry["path"] is None:
+            models[alias] = MockEngine(alias)
+        else:
+            models[alias] = YoloEngine(alias, entry["path"], config.device, entry["conf"])
+    return models
 
 
 def main():
-    global g_config, g_engine
+    global g_config, g_models, g_defaultModel
     g_config = loadConfig()
-    if g_config.model:
-        g_engine = YoloEngine(g_config.model, g_config.device, g_config.conf)
-        mode = f"yolo({g_config.model})"
-    else:
-        g_engine = MockEngine()
-        mode = "mock"
+    g_defaultModel = g_config.default_model
+    g_models = buildModels(g_config)
     os.makedirs(g_config.share_root, exist_ok=True)
     httpd = ThreadingHTTPServer((g_config.host, g_config.port), DefectHandler)
     print("ShimadaPredictService started")
     print(f"  config     : {os.path.join(os.getcwd(), kConfigFileName)}")
     print(f"  endpoint   : http://{g_config.host}:{g_config.port}{g_config.endpoint}")
-    print(f"  mode       : {mode}")
+    print(f"  default    : {g_defaultModel}")
+    for alias, entry in g_config.models.items():
+        kind = "mock" if entry["path"] is None else f"yolo({entry['path']})"
+        print(f"  model      : {alias} -> {kind} conf={entry['conf']}")
+    for workpiece, aliases in g_config.workpieces.items():
+        print(f"  workpiece  : {workpiece} -> {', '.join(aliases)}")
     print(f"  share root : {os.path.abspath(g_config.share_root)}")
     print("Press Ctrl+C to stop.", flush=True)
     try:

@@ -2,8 +2,16 @@
     "host": "127.0.0.1",
     "port": 9000,
     "endpoint": "/image_defect",
-    "model": null,
     "device": null,
-    "conf": 0.25,
+    "models": {
+        "default": {
+            "path": null,
+            "conf": 0.25
+        }
+    },
+    "default_model": "default",
+    "workpieces": {
+        "A100": ["default"]
+    },
     "share_root": "./shared"
 }

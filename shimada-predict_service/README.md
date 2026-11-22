@@ -2,7 +2,7 @@
 
 依据《软件算法通讯协议》实现的 **HTTP + JSON 缺陷检测推理服务**，以及配套的 **独立测试客户端**。两个程序完全自包含、互不依赖，可单独拷贝分发。
 
-- `server.py` — 服务端。实现 `/image_defect` 推理接口，支持 base64 传图与共享盘路径传图两种方式；启动时读取工作目录下的 `config.json`，`model` 为 `null` 时用内置 mock 引擎（零模型依赖），填了权重路径则切换为 ultralytics YOLO 真实推理。
+- `server.py` — 服务端。实现 `/image_defect` 推理接口，支持 base64 传图与共享盘路径传图两种方式；启动时读取工作目录下的 `config.json`，按别名**全量预加载**多个模型（`path` 为 `null` 的别名用内置 mock 引擎，零模型依赖；填了权重路径则是 ultralytics YOLO 真实推理）。请求不带模型字段：服务端从文件名解析工件型号，再用 `workpieces` 配对表决定跑哪些模型。
 - `client.py` — 测试客户端。生成测试图、发送两种协议请求、自动验证全部错误码。
 
 使用方法见 [USAGE.md](USAGE.md)，本文档描述完整代码逻辑。
@@ -41,7 +41,7 @@
 }
 ```
 
-请求示例（共享盘方式）：把 `images_base64` 替换为 `"relative_dir": "2021111093056/Original/S00001/"`。
+请求里**没有** `model` / `workpiece` 字段：服务端按 `file_names[0]` 解析型号，再查 `config.json` 的 `workpieces` 表决定跑哪些模型（解析规则未定，见 §4.6）。请求示例（共享盘方式）：把 `images_base64` 替换为 `"relative_dir": "2021111093056/Original/S00001/"`。
 
 响应示例：
 
@@ -75,6 +75,7 @@
 | 多图的 `image_width/height` | 协议响应中分辨率是单值，多图请求取**第一张图**的尺寸。 |
 | `ext_params` 不回传 | 协议响应结构无此字段，服务端仅接收、不校验内容、不回传。 |
 | 双程序各自持有一份错误码常量 | 换取 `client.py` 可脱离 `server.py` 独立分发给对接方；常量表改动时两边需同步。 |
+| `workpieces` 配对表 | 型号 → 模型别名数组，作为服务端“文件名 → 型号 → 模型”路由的查表依据（`workpieceModels()`），不参与模型加载、也不改变协议字段。 |
 | `error_msg` 中文文案 | 与协议错误码表原文一致；`error_code` 才是对接方应判断的字段。 |
 
 ---
@@ -91,7 +92,7 @@
              或确认图片已写完共享盘（共享盘方式）
  ② 编码      图片字节 → Base64 文本（仅 base64
              方式，体积膨胀约 4/3）
- ③ 组包      job_id/sample_id/pose_id/file_names
+ ③ 组包      job_id/sample_id/pose_id + file_names
              + images_base64 或 relative_dir
              + ext_params 组成 JSON 对象
  ④ 序列化    JSON → UTF-8 字节流
@@ -197,7 +198,7 @@ Connection: close
 | `job_id` | string | 是 | 非空；任务唯一标识，服务端**原样回传**用于两端对账；不查重、不幂等，重复提交会重复推理 |
 | `sample_id` | string | 是 | 非空；工件/样本编号 |
 | `pose_id` | string | 建议 | 位姿编号；缺省时响应回传 `""` |
-| `file_names` | string[] | 是 | 非空数组；每个元素仅是文件名（不含路径），需匹配白名单 `^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$`（忽略大小写）；响应中按请求顺序回传 |
+| `file_names` | string[] | 是 | 非空数组；每个元素仅是文件名（不含路径），需匹配白名单 `^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$`（忽略大小写）；响应中按请求顺序回传。**第一个文件名是型号解析的输入**（§4.6） |
 | `images_base64` | string[] | 二选一 | 与 `file_names` **等长且一一对应**；标准 Base64 文本（建议含 padding）；空串按 -1004 处理 |
 | `relative_dir` | string | 二选一 | 相对服务端 `share_root` 的目录，含 `..` 越界 → -1003；与 `images_base64` 互斥，并存 → -1002，均缺 → -1002 |
 | `ext_params` | object | 否 | 业务扩展参数，服务端不解析、不回传 |
@@ -250,6 +251,7 @@ results 条目：
 | 超时分工 | 客户端 timeout（C# `inspectTimeout`）覆盖"发送+排队+推理+响应"全程；服务端 socket 300s 超时用于踢掉挂死连接；两边应满足：客户端 timeout > 服务端最坏处理耗时 |
 | 请求体上限 | 256MB（`kMaxBodyBytes`）；base64 体积膨胀约 4/3，即原始图约 ≤ 190MB；超限直接拒为 -1002 不读 body |
 | 多图语义 | 逐张装图、逐张推理，结果按请求顺序合并进 `results`；**任一张失败则整个请求失败**，无部分成功 |
+| 模型选择 | 请求**不带**模型字段：`parseWorkpiece(file_names[0])` 得到型号 → 查 `workpieces` 表得到别名数组 → 按顺序逐张图、逐个模型推理并合并 `results`。解析规则未定期间 `parseWorkpiece` 返回 `None`，回落 `default_model` 单模型；型号存在但表里没有 → -1002 且不消耗装图/推理；日志 `[REQ] ... workpiece=... models=...` 记录实际选择 |
 | 共享盘时序前置 | 必须先把图片**写完盘**（文件句柄已关闭）再发 POST；服务端收到请求即刻读取，不等待、不轮询、不重试；写盘与发请求之间无确认机制，由文件系统保证 |
 | 时间口径 | 响应头 `X-Process-Ms` = 服务端处理耗时（校验+装图+推理，不含网络）；客户端 elapsed = 端到端（含建连与传输）；对账时以 X-Process-Ms 排除网络因素 |
 | 实测量级参考 | mock：全流程 2~20ms；yolo26n CPU：首次含模型加载约 3.1s（warmup），此后单图约百毫秒级 |
@@ -275,7 +277,7 @@ results 条目：
 shimada-predict_service/
 ├── server.py        # 服务端程序（接口 + mock/YOLO 推理引擎 + config.json 加载）
 ├── client.py        # 测试客户端程序（生成图 / 两种请求 / 错误码用例）
-├── config.json      # 服务端唯一配置来源（工作目录下读取，无命令行参数）
+├── config.json      # 服务端唯一配置来源（工作目录下读取，无命令行参数；含 models 别名表 + workpieces 配对表）
 ├── examples/        # 报文示例（仅文档用途，运行时不读取）
 │   ├── request_base64.json     # 请求：base64 传图
 │   ├── request_share_dir.json  # 请求：共享盘传图
@@ -302,14 +304,16 @@ shimada-predict_service/
         │  send-path ──────────────────┼─JSON────►│      └─ handleInfer          │
         │  test-errors (13 用例) ──────┼──────────►│          ├─ validateRequest │
         │                              │          │          ├─ loadImages      │
-        │  postJson (urllib, UTF-8)    │◄─JSON────┤          ├─ engine.predict   │
+        │  postJson (urllib, UTF-8)    │◄─JSON────┤          ├─ g_models[alias]   │
         │  printResult                 │ 200+JSON │          └─ processRequest  │
         └──────────────────────────────┘          │  MockEngine / YoloEngine     │
                                                   └──────────────────────────────┘
 ```
 
-- 服务端线程模型：`ThreadingHTTPServer` 为每个连接开一个线程；**推理由全局锁 `g_inferLock` 串行化**（YOLO 模型非线程安全，且产线推理通常单卡）。
-- 服务端全局状态：`g_config`（`config.json` 解析结果）、`g_engine`（推理引擎实例）、`g_inferLock`。
+- 服务端线程模型：`ThreadingHTTPServer` 为每个连接开一个线程；**推理由全局锁 `g_inferLock` 串行化**（YOLO 模型非线程安全，且产线推理通常单卡；多模型共用同一张卡时也必须串行）。
+- 服务端全局状态：`g_config`（`config.json` 解析结果，含 `models` 与 `workpieces` 两张表）、`g_models`（别名 → 引擎实例，每个实例带 `.alias`）、`g_defaultModel`、`g_inferLock`。
+- 启动时按 `models` 逐个构建引擎并常驻（`path: null` → `MockEngine`，否则 `YoloEngine`）。请求不带模型字段：`parseWorkpiece(file_names[0])` 解析型号 → `workpieces` 查表 → 得到 1~N 个引擎句柄；解析未实现时回落 `default_model` 单模型。
+- `workpieces` 是型号 → 别名数组的**配对表**：全部模型仍然启动即加载，该表只供业务逻辑用 `workpieceModels(workpiece)` 查出该型号要调用哪些引擎句柄。
 
 ---
 
@@ -324,22 +328,26 @@ shimada-predict_service/
 | `kMaxBodyBytes` = 256 MB | 请求体上限，防止恶意超大包 |
 | `kImageNamePattern` | 文件名白名单正则：`^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$`（忽略大小写）。字符集内不含 `/`、`\`，天然阻断文件名携带路径 |
 | `kHandlerTimeoutSec` = 300 | Handler 的 socket 超时，防慢客户端占死线程 |
+| `kModelAliasPattern` | 模型别名白名单：`^[A-Za-z0-9_.-]{1,64}$`，因别名会进日志与配置引用，禁止中文/空格/引号 |
+| `kWorkpiecePattern` | 工件型号白名单：`^\S{1,64}$`（不允许空白，最长 64 字符）；型号要进日志，未限制为纯 ASCII 以便兼容中文型号 |
+| `kDefaultModelConf` = 0.25 | 模型条目未写 `conf` 时的默认置信度阈值 |
 | `makeError(code, msg=None)` | 构造 `{"error_code":..., "error_msg":...}`；msg 缺省时查 `kErrorMsg` |
 | `readImageInfo(bytes)` | 用 PIL 从内存图片读取 `(width, height)`；PIL 缺失、解码失败均返回 `None`（后续映射为 -1004） |
 
 ### 4.2 推理引擎
 
-两者实现同一签名 `predict(imageBytes, fileName, imageWidth, imageHeight) -> list[dict]`，输出即协议 `results[]` 条目（不含 `file_name`，由调用方补充）。
+两者实现同一签名 `predict(imageBytes, fileName, imageWidth, imageHeight) -> list[dict]`，输出即协议 `results[]` 条目（不含 `file_name`，由调用方补充）。两者在构造时都记录 `self.alias`（即 `config.json` 里的别名），因此引擎句柄本身就携带别名，`g_models[handle.alias]` 与 `handle.alias` 始终一致。
 
-**MockEngine（默认）**
+**MockEngine（`path` 为 null 的别名）**
 
+- 构造：`MockEngine(alias)`，无模型依赖。
 - 用 `fileName` 的 MD5 前 8 位十六进制作随机种子（`random.Random(seed)`），同一文件名永远产生相同缺陷 → **结果可复现**，便于两端联调比对。
 - 每张图生成 1~3 个随机矩形缺陷：类别从 `["ZM", "HS", "QJ", "WS"]` 中选（按业务自行替换），`score` ∈ [0.3, 0.99]，框尺寸受图片分辨率约束（宽高各不超过 1/6），`area = w*h`、`length = max(w, h)`、`volume = area`（mock 占位值）。
 - `polygon / defect_raw` 返回空数组，与协议示例一致。
 
-**YoloEngine（`model` 非 null 时）**
+**YoloEngine（`path` 非 null 的别名）**
 
-- 构造时 `from ultralytics import YOLO` 并加载权重（延迟导入，mock 模式无需安装 ultralytics）。
+- 构造：`YoloEngine(alias, modelPath, device, conf)` —— `from ultralytics import YOLO` 并加载权重（延迟导入，纯 mock 部署无需安装 ultralytics）。`device` 统一来自顶层配置，`conf` 可按模型覆盖。
 - `predict` 中 `cv2.imdecode(np.frombuffer(bytes), IMREAD_COLOR)` 将请求体图片字节解码为 BGR ndarray，交给 `model.predict(img, device, conf, verbose=False)`。
 - 字段映射：
 
@@ -364,11 +372,12 @@ do_POST
        ├─ 长度校验     Content-Length ≤0 或 >256MB → -1002
        ├─ JSON 解析   非法 UTF-8/JSON     → -1002
        └─ processRequest
-            ├─ validateRequest            # 结构校验 → -1002 / -1003
-            ├─ loadImages                 # 装图 → -1003 / -1004
-            ├─ for 每张图: g_inferLock + engine.predict
+            ├─ validateRequest                # 结构校验 → -1002 / -1003
+            ├─ parseWorkpiece + 查 workpieces # 型号 → 引擎句柄[] → -1002
+            ├─ loadImages                     # 装图 → -1003 / -1004
+            ├─ for 每张图: for 每个 handle: g_inferLock + handle.predict
             │    └─ 缺陷条目补 "file_name"
-            └─ 组装 data → {"error_code":0, "error_msg":"OK", "data":{...}}
+            └─ 组装 data（严格按协议字段）→ {"error_code":0, "error_msg":"OK", "data":{...}}
   响应头额外带 X-Process-Ms（服务端处理耗时，仅诊断用）
 ```
 
@@ -384,6 +393,8 @@ do_POST
 | 6 | base64 模式：`images_base64` 非列表、长度 ≠ `file_names`、元素非字符串或空串（空串视为数据不存在） | -1002 / -1004 |
 | 7 | 共享盘模式：`relative_dir` 缺失、非字符串或空白 | -1002 |
 
+型号选择不放在 `validateRequest` 里，而是在 `processRequest` 中紧随其后、**装图之前**完成：`resolveHandles(file_names)` → `parseWorkpiece(file_names[0])` 得到型号 → `workpieceModels(型号)` 查表得到引擎句柄数组。型号在表中不存在时返回 `-1002`（`error_msg` 为 `unknown workpiece: xxx`）；`parseWorkpiece` 返回 `None`（规则未定期间恒为 `None`）时回落 `[g_models[default_model]]`。放在装图前是为了让路由错误毫秒级返回、不消耗读图开销。
+
 `loadImages` 装图规则：
 
 - **base64 模式**：`base64.b64decode` 逐张解码；`binascii.Error / ValueError / 空数据` → -1004。
@@ -397,17 +408,53 @@ do_POST
 - 两个"未读 body 就提前返回"的分支（路径 404、body 超限）额外发送 `Connection: close` 并断开连接：这两分支没有消费请求体，若复用连接，socket 缓冲区里的残留 body 会污染下一个请求。
 - `send_response / send_header` 由 `sendJson` 统一处理：`Content-Type: application/json; charset=utf-8`，可选附加头（当前为 `X-Process-Ms` 与 `Connection: close`）。
 - `do_GET` 统一返回 404 + -1002（提示 use POST），方便排查用浏览器误访问的情况。
-- 访问日志走 `log_message`（BaseHTTPRequestHandler 的标准访问行），业务日志 `[REQ] job_id=... files=N mode=... -> error_code=... elapsed=...ms` 与 `[ERROR]` 均打印到 stdout，全部英文。
+- 访问日志走 `log_message`（BaseHTTPRequestHandler 的标准访问行），业务日志 `[REQ] job_id=... workpiece=... models=... files=N mode=... -> error_code=... elapsed=...ms` 与 `[ERROR]` 均打印到 stdout，全部英文。
 
 ### 4.5 启动流程（`main`）
 
 1. `loadConfig` 从**工作目录**读取 `config.json`（`os.getcwd()`），用 `kDefaultConfig` 补齐缺省键，校验未知键与各字段类型/范围；任一项不合法即打印原因并以退出码 1 结束，**端口不会被打开**。
-2. `model` 非 null → 构造 `YoloEngine`（此时才 import ultralytics 并加载权重）；`model` 为 null → `MockEngine`。
-3. `os.makedirs(share_root, exist_ok=True)` 保证共享根存在。
-4. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，打印 config / endpoint / mode / share root 四行配置。
-5. `serve_forever()`；`Ctrl+C` 优雅退出（`server_close()`）。
+2. `loadModels` 逐个校验 `models`：别名需匹配 `^[A-Za-z0-9_.-]{1,64}$`、条目只允许 `path`/`conf` 两个键、`path` 为 `null`（mock）或非空字符串、`conf` ∈ [0, 1]（缺省 0.25）；`default_model` 缺省时仅在**只有一个模型**时自动取它，多个模型必须显式指定。
+3. `loadWorkpieces` 校验 `workpieces`：键匹配 `^\S{1,64}$`、值是非空数组、数组元素必须是 `models` 里已存在的别名且同一型号内不重复；空表 `{}` 合法。
+4. `buildModels` 按别名构建引擎：`path` 为 `null` → `MockEngine(alias)`，否则 `YoloEngine(alias, path, device, conf)`（此时才 import ultralytics 并加载权重，fail-fast）。配对表不参与这一步，所有别名一律加载。
+5. `os.makedirs(share_root, exist_ok=True)` 保证共享根存在。
+6. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，打印 config / endpoint / default / 每个 model / 每个 workpiece / share root 若干行配置。
+7. `serve_forever()`；`Ctrl+C` 优雅退出（`server_close()`）。
 
-配置在启动时读一次，运行期不重读：改 `model / host / port / endpoint / share_root` 都必须重启服务才生效，请求里也没有任何字段能覆盖它们。
+配置在启动时读一次，运行期不重读：改 `models`（增删模型、换权重、改 conf）、`workpieces`（改配对）或 `host / port / endpoint / device / share_root` 都必须重启服务才生效，请求里没有任何字段能覆盖它们。
+
+### 4.6 型号 → 模型配对表（`workpieces`）
+
+```json
+"models": {
+    "fd_v3":  { "path": "Z:\\models\\fd_v3.pt", "conf": 0.35 },
+    "seg_v1": { "path": "Z:\\models\\seg_v1.pt" }
+},
+"workpieces": {
+    "A100": ["fd_v3", "seg_v1"],
+    "B200": ["fd_v3"]
+}
+```
+
+- **键**是工件型号编号，**值**是有序的模型别名数组；数组顺序即调用顺序。请求里没有模型/型号字段，型号从 `file_names[0]` 解析。
+- 该表只做"型号 → 用哪些模型"的映射，**不影响加载**：启动时 `buildModels` 仍按 `models` 全量构建，表里表外的别名都常驻。
+- 解析入口固定为 `parseWorkpiece(fileName)`，当前 **TODO 留空**（规则与型号清单未定，恒返回 `None` → 回落 `default_model`）。规则定下后只改这一个函数，其余代码不用动：
+
+```python
+def parseWorkpiece(fileName):
+    # TODO: 例如从 "S00001_C01_P01_L0_20261119103015.jpg" 中取某一段作为工件型号
+    return None
+
+
+def resolveHandles(fileNames):
+    workpiece = parseWorkpiece(fileNames[0])
+    if workpiece is None:                       # 规则未定 / 该文件名不匹配
+        return None, [g_models[g_defaultModel]] # 回落单模型，现有行为不变
+    return workpiece, workpieceModels(workpiece)
+```
+
+- `workpieceModels(型号)` 返回**引擎句柄列表**（`handle.alias` 即别名），未知型号返回 `None`；进程内直接用 `resolveHandles`，它已经把回落逻辑封装好。
+- `processRequest` 按"外层图片、内层模型"执行：`for 图: for handle in handles: predict`，结果按顺序合并进 `results`，每条补 `file_name`；响应仍严格按协议字段，不新增模型字段。耗时 ≈ 单模型耗时 × 模型数（`g_inferLock` 串行）。
+- 校验：引用不存在的别名、同一型号里重复写同一别名、值为空数组、键含空白，都会在启动阶段报错退出。`workpieces: {}` 合法（等价于没有配对，全部走回落）。
 
 ---
 
@@ -435,6 +482,7 @@ PIL 在深灰底上撒 150 个随机灰度小方块（噪声纹理）+ 一个红
 
 - `buildBase64Payload`：读本地文件 → `base64.b64encode → ascii 字符串`，组装协议全部字段，`ext_params` 携带 `client/sent_at` 演示扩展参数用法。
 - `buildPathPayload`：`file_names` 取 basename，`relative_dir` 由 `--dir` 传入（相对服务端共享盘根）。
+- 两个 builder 都**不带** `model` / `workpiece` 字段，与服务端"从文件名解析型号"的架构一致。
 - `defaultJobId`：`J + yyyyMMddHHmmss + 3位随机数`，模拟产线 job_id 形态；`--job-id` 可覆盖。
 
 ### 5.5 四个子命令
@@ -466,7 +514,7 @@ PIL 在深灰底上撒 150 个随机灰度小方块（噪声纹理）+ 一个红
 
 ### 5.6 输出 `printResult`
 
-逐行打印 HTTP 状态、耗时、`error_code/error_msg`；成功时再打印 `data` 摘要（job_id/sample_id/pose_id/分辨率/缺陷数）以及每个缺陷一行的 `file/code/score/area/length/box`。连接失败或响应非 JSON 时打印 `error` 行。
+逐行打印 HTTP 状态、耗时、`error_code/error_msg`；成功时再打印 `data` 摘要（job_id/sample_id/pose_id/model/分辨率/缺陷数）以及每个缺陷一行的 `file/code/score/area/length/box`。连接失败或响应非 JSON 时打印 `error` 行。
 
 ---
 
@@ -474,9 +522,12 @@ PIL 在深灰底上撒 150 个随机灰度小方块（噪声纹理）+ 一个红
 
 | 需求 | 改动点 |
 |---|---|
+| 新增/替换模型 | 在 `config.json` 的 `models` 里加/改一个别名（`path` 指权重、`conf` 可覆盖），重启服务；该别名要生效需被某个 `workpieces` 型号引用（或作为 `default_model` 回落） |
+| 型号 → 多模型 | 在 `workpieces` 里把型号映射到别名数组；型号解析规则定下后填 `parseWorkpiece`，其余代码不动 |
 | 真实缺陷面积/体积 | `YoloEngine.predict` 中 area/length/volume 当前是框的占位值；接入分割模型（mask 像素数）或业务测量逻辑替换 |
 | 多边形输出 | 协议 `polygon` 字段；在引擎里把分割 mask 轮廓坐标填入即可，服务端其余逻辑不动 |
 | mock 类别 | `MockEngine.kDefectCodes` |
-| 并发推理 | 当前 `g_inferLock` 全局串行；多卡部署可为每卡建独立引擎+锁，或换推理批处理队列 |
+| 并发推理 | 当前 `g_inferLock` 全局串行（多模型同卡也串行）；多卡部署可为每张卡建独立锁，或换推理批处理队列 |
+| 模型分卡 | 当前 `device` 是全局统一的；如需按模型分卡，可在 `models` 条目里加 `device` 并把锁改为按 device 建 |
 | 接口路径/端口 | 全部在 `config.json` 中配置，无需改代码 |
 | HTTPS / 鉴权 | 协议声明"HTTP 头部无特殊校验逻辑"，如需在标准库 `ThreadingHTTPServer` 外再套 Nginx 反代加 TLS 即可，服务端不用改 |

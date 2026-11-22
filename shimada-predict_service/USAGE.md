@@ -10,7 +10,7 @@
 |---|---|
 | Python | ≥ 3.8（开发验证环境 3.10） |
 | pillow | **必装**（读取图片尺寸 / 生成测试图） |
-| ultralytics | 可选，仅 `config.json` 的 `model` 非 `null`（真实推理）时需要（会自动带上 torch、opencv 等依赖） |
+| ultralytics | 可选，仅 `config.json` 里某个模型别名的 `path` 非 `null`（真实推理）时需要（会自动带上 torch、opencv 等依赖） |
 | 操作系统 | Windows / Linux 均可（路径处理已做跨平台） |
 
 ## 2. 安装
@@ -42,10 +42,14 @@ python server.py
 ShimadaPredictService started
   config     : D:\m_code\dzy\ultralytics-main\shimada-predict_service\config.json
   endpoint   : http://127.0.0.1:9000/image_defect
-  mode       : mock
+  default    : default
+  model      : default -> mock conf=0.25
+  workpiece  : A100 -> default
   share root : D:\m_code\dzy\ultralytics-main\shimada-predict_service\shared
 Press Ctrl+C to stop.
 ```
+
+每个模型一行：`别名 -> mock` 或 `别名 -> yolo(权重路径)`；每个型号再一行 `workpiece : 型号 -> 别名, 别名`。配置多个模型时这里会列出全部。
 
 配置有问题（文件缺失、键名拼错、类型/范围不对）会打印具体原因并以退出码 1 结束，**不会打开端口**，客户端这时只会看到 `connection failed`。
 
@@ -66,6 +70,8 @@ python client.py gen-images --count 2 --out test_images
 # ④ 用刚生成的图走 base64 方式
 python client.py send-base64 --images test_images\S00001_C01_P01_L0_XXXXXXXXXXXXXX.jpg
 ```
+
+请求里不含 `model` / `workpiece` 字段：服务端按文件名解析型号（规则未定，见 §4.1 的 `workpieces`），再查配对表决定跑哪些模型。
 
 `send-base64` 成功输出示例：
 
@@ -89,33 +95,71 @@ defects     : 2
 
 ### 4.1 服务端配置 `config.json`
 
-`server.py` **不接收命令行参数**，启动时只读工作目录（`os.getcwd()`）下的 `config.json`，必须是 UTF-8 编码的 JSON 对象。7 个键**全部可选**，缺省值如下：
+`server.py` **不接收命令行参数**，启动时只读工作目录（`os.getcwd()`）下的 `config.json`，必须是 UTF-8 编码的 JSON 对象。8 个键**全部可选**，缺省值如下：
 
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `host` | string | `"127.0.0.1"` | 监听地址；对外服务改为 `"0.0.0.0"` |
 | `port` | int | `9000` | 监听端口，1~65535 |
 | `endpoint` | string | `"/image_defect"` | 接口路径，必须以 `/` 开头且不含空白 |
-| `model` | string / null | `null` | ultralytics `*.pt` 权重路径或模型名；**`null` 即 mock 模式** |
-| `device` | string / int / null | `null` | 推理设备，如 `"cpu"`、`0`；`null` 交给 ultralytics 自选 |
-| `conf` | number | `0.25` | YOLO 置信度阈值，0~1 |
+| `device` | string / int / null | `null` | 推理设备，如 `"cpu"`、`0`；**所有模型统一使用**；`null` 交给 ultralytics 自选 |
+| `models` | object | `{"default": {"path": null}}` | 模型别名表，键即别名；每个值只能有 `path` 和 `conf` 两个字段，见下 |
+| `default_model` | string / null | `null` | 型号解析失败时的回落别名；省略时仅当 `models` 只有一项才自动取它，多项必须显式指定 |
+| `workpieces` | object | `{}` | 工件型号 → 模型别名数组的**配对表**，决定某型号跑哪些模型；不影响模型加载，见下 |
 | `share_root` | string | `"./shared"` | 共享盘根目录（客户端 `relative_dir` 的基准），启动时自动创建 |
 
-校验规则：**出现未知键直接报错退出**（拦住 `modle` 这类拼写错误导致的"静默退化成 mock"）；类型/范围不对同样报错退出，错误信息带完整文件路径。
+`models` 的每个条目：
 
-示例——真实模型 + 对外监听：
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `path` | string / null | 必填 | ultralytics `*.pt` 权重路径或模型名；**`null` = 该别名使用 mock 引擎** |
+| `conf` | number | `0.25` | 该模型的置信度阈值，0~1；mock 引擎忽略此值 |
+
+别名限制为 `^[A-Za-z0-9_.-]{1,64}$`（会进日志，所以不允许中文/空格/引号）。
+
+`workpieces` 的每个条目是"型号 → 模型别名数组"：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| 型号（键） | string | 工件型号编号，`^\S{1,64}$`（不含空白，最长 64 字符） |
+| 模型别名数组（值） | string[] | 非空数组，元素必须是 `models` 里已存在的别名；**顺序即业务调用顺序**，同一型号内不能重复 |
+
+配对表只决定"这个型号要跑哪些模型"，**不影响加载**：启动时仍然把 `models` 里所有别名全部加载。业务代码用 `workpieceModels(型号)` 取引擎句柄列表（未知型号返回 `None`）。
+
+型号来源是**请求里的文件名**：`parseWorkpiece(file_names[0])` 从文件名解析型号。目前解析规则与型号清单都未定，函数留空返回 `None`（代码里有 `TODO`），此时服务端回落 `default_model` 跑单模型，行为与之前一致。规则确定后只改 `parseWorkpiece` 一个函数即可，配对表、多模型执行、日志都已就绪。
+
+校验规则：**出现未知键直接报错退出**（顶层未知键、`models` 条目内未知键都拦，防止 `modle` 这类拼写错误或误以为支持按模型分卡）；类型/范围不对同样报错退出，错误信息带完整文件路径。
+
+示例——两个模型 + 对外监听（`device` 统一，`conf` 按模型覆盖）：
 
 ```json
 {
     "host": "0.0.0.0",
     "port": 9000,
     "endpoint": "/image_defect",
-    "model": "yolo11n.pt",
     "device": 0,
-    "conf": 0.3,
+    "models": {
+        "fd_v3": { "path": "Z:\\models\\fd_v3.pt", "conf": 0.35 },
+        "seg_v1": { "path": "Z:\\models\\seg_v1.pt" }
+    },
+    "default_model": "fd_v3",
+    "workpieces": {
+        "A100": ["fd_v3", "seg_v1"],
+        "B200": ["fd_v3"]
+    },
     "share_root": "./shared"
 }
 ```
+
+请求里**不带** `model` 字段，型号由服务端从文件名解析：
+
+```json
+{ "job_id": "J001", "sample_id": "S00001", "file_names": ["A100_C01_P01_L0_20261123103015.jpg"], "relative_dir": "demo/" }
+```
+
+- 解析出型号后按 `workpieces` 跑该型号的全部模型，结果合并返回；响应按协议原样输出，**不额外回显型号/模型**。
+- 型号在表里查不到 → `-1002`（`error_msg` 为 `unknown workpiece: xxx`）。
+- 解析规则未定期间 `parseWorkpiece` 恒返回 `None`，走 `default_model` 单模型。想知道实际跑了哪些模型，看服务端 `[REQ] ... workpiece=... models=...` 日志。
 
 示例——共享盘指向映射盘（只写要改的键，其余走默认值）：
 
@@ -125,7 +169,9 @@ defects     : 2
 }
 ```
 
-保存后**重启** `python server.py` 才生效：配置只在启动时读一次，运行期不重读，请求里也没有任何字段能覆盖这些设置。
+保存后**重启** `python server.py` 才生效：配置只在启动时读一次，运行期不重读，请求里没有任何字段能覆盖这些设置。
+
+校验规则补充：`models` 为空、模型条目含未知键（如误写 `device`）、`default_model` 指向不存在的别名、`workpieces` 引用了不存在的别名或同一型号内重复、型号键含空白，都会启动即报错退出。
 
 ### 4.2 客户端 client.py
 
@@ -182,11 +228,15 @@ python client.py send-path --dir demo --files S00001_C01_P01_L0_20260211103015.j
 
 ## 6. 真实模型模式
 
-把 `config.json` 的 `model` 改成权重路径或模型名，再重启服务：
+在 `config.json` 的 `models` 里给别名配权重路径（`path`），`device` 统一写在顶层；再重启服务：
 
 ```json
 {
-    "model": "yolo11n.pt"
+    "device": 0,
+    "models": {
+        "yolo11n": { "path": "yolo11n.pt", "conf": 0.3 }
+    },
+    "default_model": "yolo11n"
 }
 ```
 
@@ -194,7 +244,9 @@ python client.py send-path --dir demo --files S00001_C01_P01_L0_20260211103015.j
 python server.py
 ```
 
-- 首次运行会自动下载 `yolo11n.pt` 权重；下载失败/路径写错会在启动阶段就崩（进程不监听端口）。
+- 启动时**一次性加载全部别名**（fail-fast）：首次运行会自动下载 `yolo11n.pt`；任一权重路径写错/下载失败会在启动阶段就崩（进程不监听端口）。
+- 跑哪个模型由**文件名解析出的型号**决定：`workpieces` 把型号映射到 1~N 个别名，全部按顺序执行并合并结果。多个模型可以共存，启动日志会逐个列出。
+- 解析规则未定期间 `parseWorkpiece` 返回 `None`，回落 `default_model`（示例里是 `yolo11n`），因此现在仍能正常单模型推理。
 - 检出框 `xyxy` 直接映射协议 `box`；类别名映射 `code`；置信度映射 `score`。
 - `area/length/volume` 目前是**框的占位值**（框面积/框长边），接入真实测量逻辑见 README §6。
 - 无检出时 `results: []`，`error_code` 仍为 0 —— 这是正常业务结果。
@@ -205,7 +257,7 @@ python server.py
 |---|---|---|
 | 0 | `OK` | 推理成功（`results` 可为空 = 无缺陷） |
 | -1001 | 系统错误：未知错误 | 服务端内部异常，看服务端控制台 `[ERROR]` 日志 |
-| -1002 | 参数错误：参数不合法 | JSON 非法、缺 job_id/sample_id/file_names、数组长度不匹配、两种传图方式并存或都缺失 |
+| -1002 | 参数错误：参数不合法 | JSON 非法、缺 job_id/sample_id/file_names、数组长度不匹配、两种传图方式并存或都缺失、**文件名解析出的型号不在 `workpieces` 中（error_msg 为 `unknown workpiece: xxx`）** |
 | -1003 | 参数错误：图片名称错误 | 文件名空白、含非法字符（白名单：字母数字下划线点空格横线）、扩展名不在 jpg/jpeg/png/bmp/tif/tiff、relative_dir 越界 |
 | -1004 | 参数错误：图片数据不存在 | base64 解码失败/为空、图片字节无法解码、共享盘文件不存在或不可读 |
 
@@ -264,7 +316,12 @@ var payload = new
 | 响应 -1004 但文件确实存在 | 服务端 `share_root` 与客户端 `--dir` 拼出的绝对路径不对；共享盘模式要求**服务端**能访问该路径，不是客户端 |
 | 启动即退出：`config file not found` | 工作目录不对（`config.json` 只从 `os.getcwd()` 读，不按脚本所在目录找）；`cd` 到 `shimada_predict_service` 再启动 |
 | 启动即退出：`has unknown keys ['modle']` | 键名拼错，按提示里给出的允许键列表改 |
-| 改了 `model` 但没生效 | 配置只在启动时读一次，必须重启 `python server.py` |
+| 启动即退出：`default_model is required` | `models` 里有多个别名却没写 `default_model`，补一个（只有一个模型时才允许省略） |
+| 启动即退出：`model 'x' has unknown keys ['device']` | `device` 是全局统一配置，不能写在模型条目里；模型条目只允许 `path` / `conf` |
+| 启动即退出：`workpiece 'X' references unknown model alias ...` | `workpieces` 里引用的别名必须在 `models` 中存在（区分大小写） |
+| 启动即退出：`workpiece 'X' lists the same model alias more than once` | 同一型号下不要重复写同一个别名 |
+| 响应 `unknown workpiece: xxx` | 文件名解析出的型号不在 `workpieces` 表里。解析规则定下后才可能出现；补配对项或让解析函数回退 `None` |
+| 改了 `models` / `workpieces` 但没生效 | 配置只在启动时读一次，必须重启 `python server.py`；新增模型、改配对同样要重启 |
 | 大图请求被拒 -1002 invalid content length | 请求体超过 256MB 上限（`kMaxBodyBytes`），请压缩图片或调整上限 |
 | 想看每次请求耗时 | 看服务端 `[REQ] ... elapsed=...ms` 日志，或响应头 `X-Process-Ms` |
 | 停止服务 | 服务端控制台 `Ctrl+C` |
@@ -275,7 +332,7 @@ var payload = new
 |---|---|
 | `server.py` | 服务端（接口 + mock/YOLO 引擎 + `config.json` 加载） |
 | `client.py` | 测试客户端 |
-| `config.json` | 服务端唯一配置（工作目录下读取；无命令行参数） |
+| `config.json` | 服务端唯一配置（工作目录下读取；含 `models` 别名表 + `workpieces` 配对表 + `default_model`，无命令行参数） |
 | `examples/` | 报文示例：`request_base64.json`、`request_share_dir.json`、`response_success.json`、`response_failure.json`（仅对照用，运行时不读取） |
 | `requirements.txt` | 依赖：`pillow`（必装）、`ultralytics`（可选） |
 | `README.md` | 完整代码逻辑说明 |
