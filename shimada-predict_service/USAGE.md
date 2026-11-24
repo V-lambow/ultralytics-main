@@ -6,12 +6,12 @@
 
 ## 1. 环境要求
 
-| 项 | 要求 |
-|---|---|
-| Python | ≥ 3.8（开发验证环境 3.10） |
-| pillow | **必装**（读取图片尺寸 / 生成测试图） |
+| 项          | 要求                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------ |
+| Python      | ≥ 3.8（开发验证环境 3.10）                                                                       |
+| pillow      | **必装**（读取图片尺寸 / 生成测试图）                                                            |
 | ultralytics | 可选，仅 `config.json` 的 `model` 非 `null`（真实推理）时需要（会自动带上 torch、opencv 等依赖） |
-| 操作系统 | Windows / Linux 均可（路径处理已做跨平台） |
+| 操作系统    | Windows / Linux 均可（路径处理已做跨平台）                                                       |
 
 ## 2. 安装
 
@@ -91,15 +91,15 @@ defects     : 2
 
 `server.py` **不接收命令行参数**，启动时只读工作目录（`os.getcwd()`）下的 `config.json`，必须是 UTF-8 编码的 JSON 对象。7 个键**全部可选**，缺省值如下：
 
-| 键 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `host` | string | `"127.0.0.1"` | 监听地址；对外服务改为 `"0.0.0.0"` |
-| `port` | int | `9000` | 监听端口，1~65535 |
-| `endpoint` | string | `"/image_defect"` | 接口路径，必须以 `/` 开头且不含空白 |
-| `model` | string / null | `null` | ultralytics `*.pt` 权重路径或模型名；**`null` 即 mock 模式** |
-| `device` | string / int / null | `null` | 推理设备，如 `"cpu"`、`0`；`null` 交给 ultralytics 自选 |
-| `conf` | number | `0.25` | YOLO 置信度阈值，0~1 |
-| `share_root` | string | `"./shared"` | 共享盘根目录（客户端 `relative_dir` 的基准），启动时自动创建 |
+| 键           | 类型                | 默认值            | 说明                                                         |
+| ------------ | ------------------- | ----------------- | ------------------------------------------------------------ |
+| `host`       | string              | `"127.0.0.1"`     | 监听地址；对外服务改为 `"0.0.0.0"`                           |
+| `port`       | int                 | `9000`            | 监听端口，1~65535                                            |
+| `endpoint`   | string              | `"/image_defect"` | 接口路径，必须以 `/` 开头且不含空白                          |
+| `model`      | string / null       | `null`            | ultralytics `*.pt` 权重路径或模型名；**`null` 即 mock 模式** |
+| `device`     | string / int / null | `null`            | 推理设备，如 `"cpu"`、`0`；`null` 交给 ultralytics 自选      |
+| `conf`       | number              | `0.25`            | YOLO 置信度阈值，0~1                                         |
+| `share_root` | string              | `"./shared"`      | 共享盘根目录（客户端 `relative_dir` 的基准），启动时自动创建 |
 
 校验规则：**出现未知键直接报错退出**（拦住 `modle` 这类拼写错误导致的"静默退化成 mock"）；类型/范围不对同样报错退出，错误信息带完整文件路径。
 
@@ -107,13 +107,13 @@ defects     : 2
 
 ```json
 {
-    "host": "0.0.0.0",
-    "port": 9000,
-    "endpoint": "/image_defect",
-    "model": "yolo11n.pt",
-    "device": 0,
-    "conf": 0.3,
-    "share_root": "./shared"
+  "host": "0.0.0.0",
+  "port": 9000,
+  "endpoint": "/image_defect",
+  "model": "yolo11n.pt",
+  "device": 0,
+  "conf": 0.3,
+  "share_root": "./shared"
 }
 ```
 
@@ -121,7 +121,7 @@ defects     : 2
 
 ```json
 {
-    "share_root": "Z:\\OriginalImages"
+  "share_root": "Z:\\OriginalImages"
 }
 ```
 
@@ -131,22 +131,22 @@ defects     : 2
 
 全局参数（**必须写在子命令之前**）：
 
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `--url` | `http://127.0.0.1:9000/image_defect` | 服务地址 |
-| `--timeout` | `30.0` | 请求超时（秒） |
-| `--job-id` | 自动生成 | 任务号 |
-| `--sample-id` | `S00001` | 工件编号 |
-| `--pose-id` | `P01` | 位姿编号 |
+| 参数          | 默认值                               | 说明           |
+| ------------- | ------------------------------------ | -------------- |
+| `--url`       | `http://127.0.0.1:9000/image_defect` | 服务地址       |
+| `--timeout`   | `30.0`                               | 请求超时（秒） |
+| `--job-id`    | 自动生成                             | 任务号         |
+| `--sample-id` | `S00001`                             | 工件编号       |
+| `--pose-id`   | `P01`                                | 位姿编号       |
 
 子命令：
 
-| 子命令 | 参数 | 作用 |
-|---|---|---|
-| `gen-images` | `--out`（默认 `test_images`）、`--count`（默认 2）、`--width`（1920）、`--height`（1440） | 生成随机测试图，按协议风格命名 |
-| `send-base64` | `--images <路径...>`；**省略则自动生成一张内存测试图** | base64 传图请求 |
-| `send-path` | `--dir <相对目录>`（必填）、`--files <文件名...>`（必填） | 共享盘传图请求 |
-| `test-errors` | 无 | 自动验证 13 个错误码用例，退出码 0=全过 / 1=有失败 |
+| 子命令        | 参数                                                                                      | 作用                                               |
+| ------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `gen-images`  | `--out`（默认 `test_images`）、`--count`（默认 2）、`--width`（1920）、`--height`（1440） | 生成随机测试图，按协议风格命名                     |
+| `send-base64` | `--images <路径...>`；**省略则自动生成一张内存测试图**                                    | base64 传图请求                                    |
+| `send-path`   | `--dir <相对目录>`（必填）、`--files <文件名...>`（必填）                                 | 共享盘传图请求                                     |
+| `test-errors` | 无                                                                                        | 自动验证 13 个错误码用例，退出码 0=全过 / 1=有失败 |
 
 示例：
 
@@ -186,7 +186,7 @@ python client.py send-path --dir demo --files S00001_C01_P01_L0_20260211103015.j
 
 ```json
 {
-    "model": "yolo11n.pt"
+  "model": "yolo11n.pt"
 }
 ```
 
@@ -201,13 +201,13 @@ python server.py
 
 ## 7. 错误码
 
-| error_code | error_msg | 含义 / 常见原因 |
-|---|---|---|
-| 0 | `OK` | 推理成功（`results` 可为空 = 无缺陷） |
-| -1001 | 系统错误：未知错误 | 服务端内部异常，看服务端控制台 `[ERROR]` 日志 |
-| -1002 | 参数错误：参数不合法 | JSON 非法、缺 job_id/sample_id/file_names、数组长度不匹配、两种传图方式并存或都缺失 |
-| -1003 | 参数错误：图片名称错误 | 文件名空白、含非法字符（白名单：字母数字下划线点空格横线）、扩展名不在 jpg/jpeg/png/bmp/tif/tiff、relative_dir 越界 |
-| -1004 | 参数错误：图片数据不存在 | base64 解码失败/为空、图片字节无法解码、共享盘文件不存在或不可读 |
+| error_code | error_msg                | 含义 / 常见原因                                                                                                     |
+| ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| 0          | `OK`                     | 推理成功（`results` 可为空 = 无缺陷）                                                                               |
+| -1001      | 系统错误：未知错误       | 服务端内部异常，看服务端控制台 `[ERROR]` 日志                                                                       |
+| -1002      | 参数错误：参数不合法     | JSON 非法、缺 job_id/sample_id/file_names、数组长度不匹配、两种传图方式并存或都缺失                                 |
+| -1003      | 参数错误：图片名称错误   | 文件名空白、含非法字符（白名单：字母数字下划线点空格横线）、扩展名不在 jpg/jpeg/png/bmp/tif/tiff、relative_dir 越界 |
+| -1004      | 参数错误：图片数据不存在 | base64 解码失败/为空、图片字节无法解码、共享盘文件不存在或不可读                                                    |
 
 ## 8. C# 对接参考
 
@@ -255,30 +255,30 @@ var payload = new
 
 ## 9. 常见问题（FAQ）
 
-| 现象 | 原因与处理 |
-|---|---|
-| `connection failed: ...` | 服务未启动 / 地址端口不对 / 防火墙拦截。先确认服务端控制台有没有打印 `ShimadaPredictService started`（配置不合法会在启动阶段直接退出），再用 `python client.py test-errors` 快速排查 |
-| 中文文件名能不能用 | 可以：白名单正则的 `\w` 在 Python 3 下包含中文，`中文名.jpg` 实测能通过；只需保证请求 body 是 UTF-8。仍建议用 ASCII 命名，避免对接方编码差异 |
-| 端口被占用 | `OSError: [WinError 10048]` → 改 `config.json` 的 `port` 或释放 9000 端口 |
-| 响应 404 + `-1002` unknown endpoint | URL 路径与 `config.json` 的 `endpoint` 不一致 |
-| 响应 -1004 但文件确实存在 | 服务端 `share_root` 与客户端 `--dir` 拼出的绝对路径不对；共享盘模式要求**服务端**能访问该路径，不是客户端 |
-| 启动即退出：`config file not found` | 工作目录不对（`config.json` 只从 `os.getcwd()` 读，不按脚本所在目录找）；`cd` 到 `shimada_predict_service` 再启动 |
-| 启动即退出：`has unknown keys ['modle']` | 键名拼错，按提示里给出的允许键列表改 |
-| 改了 `model` 但没生效 | 配置只在启动时读一次，必须重启 `python server.py` |
-| 大图请求被拒 -1002 invalid content length | 请求体超过 256MB 上限（`kMaxBodyBytes`），请压缩图片或调整上限 |
-| 想看每次请求耗时 | 看服务端 `[REQ] ... elapsed=...ms` 日志，或响应头 `X-Process-Ms` |
-| 停止服务 | 服务端控制台 `Ctrl+C` |
+| 现象                                      | 原因与处理                                                                                                                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `connection failed: ...`                  | 服务未启动 / 地址端口不对 / 防火墙拦截。先确认服务端控制台有没有打印 `ShimadaPredictService started`（配置不合法会在启动阶段直接退出），再用 `python client.py test-errors` 快速排查 |
+| 中文文件名能不能用                        | 可以：白名单正则的 `\w` 在 Python 3 下包含中文，`中文名.jpg` 实测能通过；只需保证请求 body 是 UTF-8。仍建议用 ASCII 命名，避免对接方编码差异                                         |
+| 端口被占用                                | `OSError: [WinError 10048]` → 改 `config.json` 的 `port` 或释放 9000 端口                                                                                                            |
+| 响应 404 + `-1002` unknown endpoint       | URL 路径与 `config.json` 的 `endpoint` 不一致                                                                                                                                        |
+| 响应 -1004 但文件确实存在                 | 服务端 `share_root` 与客户端 `--dir` 拼出的绝对路径不对；共享盘模式要求**服务端**能访问该路径，不是客户端                                                                            |
+| 启动即退出：`config file not found`       | 工作目录不对（`config.json` 只从 `os.getcwd()` 读，不按脚本所在目录找）；`cd` 到 `shimada_predict_service` 再启动                                                                    |
+| 启动即退出：`has unknown keys ['modle']`  | 键名拼错，按提示里给出的允许键列表改                                                                                                                                                 |
+| 改了 `model` 但没生效                     | 配置只在启动时读一次，必须重启 `python server.py`                                                                                                                                    |
+| 大图请求被拒 -1002 invalid content length | 请求体超过 256MB 上限（`kMaxBodyBytes`），请压缩图片或调整上限                                                                                                                       |
+| 想看每次请求耗时                          | 看服务端 `[REQ] ... elapsed=...ms` 日志，或响应头 `X-Process-Ms`                                                                                                                     |
+| 停止服务                                  | 服务端控制台 `Ctrl+C`                                                                                                                                                                |
 
 ## 10. 文件清单
 
-| 文件 | 说明 |
-|---|---|
-| `server.py` | 服务端（接口 + mock/YOLO 引擎 + `config.json` 加载） |
-| `client.py` | 测试客户端 |
-| `config.json` | 服务端唯一配置（工作目录下读取；无命令行参数） |
-| `examples/` | 报文示例：`request_base64.json`、`request_share_dir.json`、`response_success.json`、`response_failure.json`（仅对照用，运行时不读取） |
-| `requirements.txt` | 依赖：`pillow`（必装）、`ultralytics`（可选） |
-| `README.md` | 完整代码逻辑说明 |
-| `USAGE.md` | 本手册 |
-| `shared/` | 服务端共享盘根目录（运行时生成） |
-| `test_images/` | 客户端测试图输出目录（运行时生成） |
+| 文件               | 说明                                                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.py`        | 服务端（接口 + mock/YOLO 引擎 + `config.json` 加载）                                                                                  |
+| `client.py`        | 测试客户端                                                                                                                            |
+| `config.json`      | 服务端唯一配置（工作目录下读取；无命令行参数）                                                                                        |
+| `examples/`        | 报文示例：`request_base64.json`、`request_share_dir.json`、`response_success.json`、`response_failure.json`（仅对照用，运行时不读取） |
+| `requirements.txt` | 依赖：`pillow`（必装）、`ultralytics`（可选）                                                                                         |
+| `README.md`        | 完整代码逻辑说明                                                                                                                      |
+| `USAGE.md`         | 本手册                                                                                                                                |
+| `shared/`          | 服务端共享盘根目录（运行时生成）                                                                                                      |
+| `test_images/`     | 客户端测试图输出目录（运行时生成）                                                                                                    |

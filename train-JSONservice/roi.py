@@ -1,10 +1,11 @@
-"""ROI 裁剪训练：在数据读取层裁剪图像与标注，验证时回映射到原图坐标系。"""
+"""ROI 裁剪训练：在数据读取层裁剪图像与标注，验证时回映射到原图坐标系。."""
 
 import math
 
 import cv2
 import numpy as np
 import torch
+
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 from ultralytics.models.yolo.obb.train import OBBTrainer

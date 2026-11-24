@@ -76,8 +76,8 @@ def _match(iou: torch.Tensor, gt_cls: torch.Tensor, pred_cls: torch.Tensor) -> t
 def _image_difficulty(gt_cls: torch.Tensor, gt_box: torch.Tensor, pred: dict[str, torch.Tensor]) -> float:
     """Score one image's detection difficulty in [0, 1].
 
-    Difficulty is ``(FN + 0.5 * FP + sum(1 - IoU) over matches) / max(1, n_gt + n_pred)``: a fully missed
-    image reaches 1.0, an image holding only false positives saturates at 0.5, a clean image scores 0.
+    Difficulty is ``(FN + 0.5 * FP + sum(1 - IoU) over matches) / max(1, n_gt + n_pred)``: a fully missed image reaches
+    1.0, an image holding only false positives saturates at 0.5, a clean image scores 0.
 
     Args:
         gt_cls (torch.Tensor): Ground truth class indices of shape (N,) in letterboxed pixel space.
@@ -100,8 +100,8 @@ def _image_difficulty(gt_cls: torch.Tensor, gt_box: torch.Tensor, pred: dict[str
 def _evaluate(trainer) -> dict[str, float]:
     """Run one inference pass over the unaugmented training split and return per-image difficulty.
 
-    Mirrors DetectionValidator: EMA weights, val-mode (no augmentation) boxes, identical NMS and ground
-    truth preparation, so difficulty is measured exactly where validation measures it.
+    Mirrors DetectionValidator: EMA weights, val-mode (no augmentation) boxes, identical NMS and ground truth
+    preparation, so difficulty is measured exactly where validation measures it.
 
     Args:
         trainer: The DetectionTrainer currently training.
@@ -164,8 +164,8 @@ def _evaluate(trainer) -> dict[str, float]:
 def _refresh(trainer) -> None:
     """Rebuild CURB weights from a fresh difficulty pass and swap them into the live train sampler.
 
-    Pipeline: EMA-smoothed difficulty -> median-normalized clipped weights -> stagnation stop-loss ->
-    per-class exposure quota -> in-place sampler update and prefetch reset.
+    Pipeline: EMA-smoothed difficulty -> median-normalized clipped weights -> stagnation stop-loss -> per-class exposure
+    quota -> in-place sampler update and prefetch reset.
 
     Args:
         trainer: The DetectionTrainer currently training.

@@ -1,4 +1,4 @@
-"""CLI：按配置跑一次训练并打印事件流，Ctrl+C 停止训练。"""
+"""CLI：按配置跑一次训练并打印事件流，Ctrl+C 停止训练。."""
 
 import argparse
 import json

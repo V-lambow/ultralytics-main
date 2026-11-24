@@ -7,7 +7,7 @@ import math
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 __all__ = (
     "CBAM",
@@ -674,8 +674,8 @@ class Index(nn.Module):
 class DCNv2(nn.Module):
     """Deformable Convolution v2 module with batch normalization and activation.
 
-    This module wraps torchvision's DeformConv2d with offset prediction network,
-    batch normalization and activation to be compatible with ultralytics Conv interface.
+    This module wraps torchvision's DeformConv2d with offset prediction network, batch normalization and activation to
+    be compatible with ultralytics Conv interface.
 
     Attributes:
         offset_conv (nn.Conv2d): Convolution layer to predict offset.
@@ -788,10 +788,9 @@ class DCNv4(nn.Module):
         # Per-group deformable convolutions
         c1_g = c1 // groups
         c2_g = c2 // groups
-        self.deform_convs = nn.ModuleList([
-            DeformConv2d(c1_g, c2_g, kernel_size=k, stride=s, padding=p, groups=g, bias=False)
-            for _ in range(groups)
-        ])
+        self.deform_convs = nn.ModuleList(
+            [DeformConv2d(c1_g, c2_g, kernel_size=k, stride=s, padding=p, groups=g, bias=False) for _ in range(groups)]
+        )
         self.bn = nn.BatchNorm2d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
@@ -804,7 +803,7 @@ class DCNv4(nn.Module):
         Returns:
             (torch.Tensor): Output tensor.
         """
-        B, C, H, W = x.shape
+        B, C, _H, _W = x.shape
         # Shared offset prediction
         offset = self.offset_conv(x)
 
@@ -817,7 +816,7 @@ class DCNv4(nn.Module):
         x_g = torch.split(x, C // self.groups, dim=1)
         out_list = []
         for i, dconv in enumerate(self.deform_convs):
-            out_list.append(dconv(x_g[i], offset) * w[:, i:i+1])
+            out_list.append(dconv(x_g[i], offset) * w[:, i : i + 1])
         out = torch.cat(out_list, dim=1)
 
         return self.act(self.bn(out))
@@ -831,7 +830,7 @@ class DCNv4(nn.Module):
         Returns:
             (torch.Tensor): Output tensor.
         """
-        B, C, H, W = x.shape
+        B, C, _H, _W = x.shape
         offset = self.offset_conv(x)
         w = self.avg_pool(x)
         w = self.channel_proj(w)
@@ -839,6 +838,6 @@ class DCNv4(nn.Module):
         x_g = torch.split(x, C // self.groups, dim=1)
         out_list = []
         for i, dconv in enumerate(self.deform_convs):
-            out_list.append(dconv(x_g[i], offset) * w[:, i:i+1])
+            out_list.append(dconv(x_g[i], offset) * w[:, i : i + 1])
         out = torch.cat(out_list, dim=1)
         return self.act(out)

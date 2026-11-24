@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import torch
 import zmq
+
 from ultralytics import YOLO
 from ultralytics.data.dataset import YOLODataset
 from ultralytics.models.yolo.detect.train import DetectionTrainer
@@ -512,22 +513,22 @@ class TrainService:
             if cfg_device == "auto":
                 cfg_device = "0" if torch.cuda.is_available() else "cpu"
 
-            kw = dict(
-                model=model_path,
-                data=self.train_cfg.get("dataYaml", "coco8.yaml"),
-                epochs=self.train_cfg.get("epochs", 100),
-                batch=self.train_cfg.get("batch", 16),
-                imgsz=self.train_cfg.get("imgsz", 640),
-                device=cfg_device,
-                amp=self.train_cfg.get("amp", True),
-                cos_lr=self.train_cfg.get("cos_lr", False),
-                optimizer=self.train_cfg.get("optimizer", "auto"),
-                resume=self.resume_ckpt if resume else False,
-                task=self.train_cfg.get("task", "detect"),
-                project=self.output_dir,
-                plots=True,
-                exist_ok=True,
-            )
+            kw = {
+                "model": model_path,
+                "data": self.train_cfg.get("dataYaml", "coco8.yaml"),
+                "epochs": self.train_cfg.get("epochs", 100),
+                "batch": self.train_cfg.get("batch", 16),
+                "imgsz": self.train_cfg.get("imgsz", 640),
+                "device": cfg_device,
+                "amp": self.train_cfg.get("amp", True),
+                "cos_lr": self.train_cfg.get("cos_lr", False),
+                "optimizer": self.train_cfg.get("optimizer", "auto"),
+                "resume": self.resume_ckpt if resume else False,
+                "task": self.train_cfg.get("task", "detect"),
+                "project": self.output_dir,
+                "plots": True,
+                "exist_ok": True,
+            }
 
             alias = self.train_cfg.get("alias", "")
             if alias:

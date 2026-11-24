@@ -49,12 +49,12 @@ ultralytics 训练
 
 **四条可靠性约定**
 
-| 约定 | 说明 |
-|---|---|
+| 约定             | 说明                                                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | 恰好一个终态事件 | `manager._dispatch()` 对 `TERMINAL_EVENTS` 做幂等守卫，`training_completed` / `training_error` / `training_stopped` 只会发出一个 |
-| 杀整个进程树 | `taskkill /T`（失败则 `/F /T`），POSIX 走 `killpg`，且强杀后必 `wait()` 回收，不留孤儿 DataLoader |
-| 参数白名单 | `TRAIN_ARGS_ALLOWED` 之外的 key 直接拒绝，不透传给 ultralytics |
-| 磁盘为事实来源 | 进度读 `results.csv`，状态读 `service_state.json`，不依赖推送 |
+| 杀整个进程树     | `taskkill /T`（失败则 `/F /T`），POSIX 走 `killpg`，且强杀后必 `wait()` 回收，不留孤儿 DataLoader                                |
+| 参数白名单       | `TRAIN_ARGS_ALLOWED` 之外的 key 直接拒绝，不透传给 ultralytics                                                                   |
+| 磁盘为事实来源   | 进度读 `results.csv`，状态读 `service_state.json`，不依赖推送                                                                    |
 
 ---
 
@@ -117,11 +117,11 @@ python main.py --config config.json --resume E:/runs/exp/weights/last.pt
 
 ### 退出码
 
-| 码 | 含义 |
-|---|---|
-| 0 | `training_completed` |
-| 1 | `training_error`，或配置/协议错误 |
-| 130 | `training_stopped`（Ctrl+C） |
+| 码  | 含义                              |
+| --- | --------------------------------- |
+| 0   | `training_completed`              |
+| 1   | `training_error`，或配置/协议错误 |
+| 130 | `training_stopped`（Ctrl+C）      |
 
 ---
 
@@ -133,7 +133,7 @@ python main.py --config config.json --resume E:/runs/exp/weights/last.pt
 {
   "train": {
     "model": "E:/m_code/ultralytics-main/yolo26n.pt",
-    "data":  "D:/dataset/xxx/data.yaml",
+    "data": "D:/dataset/xxx/data.yaml",
     "epochs": 100,
     "batch": 16,
     "imgsz": 640,
@@ -167,10 +167,10 @@ shear perspective dropout box cls dfl pose kobj
 
 ### 服务专属字段
 
-| 字段 | 说明 |
-|---|---|
-| `useRoi` | `true` 时才 `import roi`，默认路径完全黑盒 |
-| `roi` | `{x, y, width, height}`，图像坐标系，宽高必须 > 0 |
+| 字段     | 说明                                              |
+| -------- | ------------------------------------------------- |
+| `useRoi` | `true` 时才 `import roi`，默认路径完全黑盒        |
+| `roi`    | `{x, y, width, height}`，图像坐标系，宽高必须 > 0 |
 
 `useRoi: true` 但 `roi` 缺省或四项全 0 时视为**未启用 ROI**（anno_studio 的复选框默认勾选、ROI 未绘制时就是这种状态），直接走全图训练。
 | `device` | `"auto"` → 有 CUDA 取 `0`，否则 `cpu`；也支持 `"0"`、`"0,1"`、`"cpu"`、`"mps"` |
@@ -181,11 +181,11 @@ shear perspective dropout box cls dfl pose kobj
 
 旧 ZMQ 服务的配置字段名在解析时会自动归一化，`anno_studio` 等既有配置**无需改动**：
 
-| 旧字段 | 归一化为 | 说明 |
-|---|---|---|
-| `modelPath` | `model` | 权重或模型 YAML 路径 |
-| `dataYaml` | `data` | 数据集 YAML 路径 |
-| `alias` | `name` | 输出子目录名 |
+| 旧字段      | 归一化为 | 说明                 |
+| ----------- | -------- | -------------------- |
+| `modelPath` | `model`  | 权重或模型 YAML 路径 |
+| `dataYaml`  | `data`   | 数据集 YAML 路径     |
+| `alias`     | `name`   | 输出子目录名         |
 
 规则：
 
@@ -213,15 +213,15 @@ __TRAIN_SERVICE_EVENT__={"version": 1, "event": "training_started", ...}
 
 ### 事件表
 
-| 事件 | 触发时机 | 关键字段 |
-|---|---|---|
-| `training_started` | ultralytics `on_train_start` 回调 | `total_epochs`、`save_dir` |
-| `training_metrics` | 每个 epoch 结束（`on_fit_epoch_end`） | `epoch`、`loss`、`box_loss`、`precision`、`mAP50`、`mAP50_95`、`task` 等 |
-| `training_log` | 子进程任意 stdout/stderr 文本行 | `message` |
-| `training_completed` | 训练正常结束 | `results` |
-| `training_error` | 初始化或训练抛异常、非零退出 | `error`、`exception_type`、`traceback` |
-| `training_stopped` | 父进程收到 stop / Ctrl+C | — |
-| `protocol_error` | 事件版本不符或缺 `event` 字段 | `error` |
+| 事件                 | 触发时机                              | 关键字段                                                                 |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------ |
+| `training_started`   | ultralytics `on_train_start` 回调     | `total_epochs`、`save_dir`                                               |
+| `training_metrics`   | 每个 epoch 结束（`on_fit_epoch_end`） | `epoch`、`loss`、`box_loss`、`precision`、`mAP50`、`mAP50_95`、`task` 等 |
+| `training_log`       | 子进程任意 stdout/stderr 文本行       | `message`                                                                |
+| `training_completed` | 训练正常结束                          | `results`                                                                |
+| `training_error`     | 初始化或训练抛异常、非零退出          | `error`、`exception_type`、`traceback`                                   |
+| `training_stopped`   | 父进程收到 stop / Ctrl+C              | —                                                                        |
+| `protocol_error`     | 事件版本不符或缺 `event` 字段         | `error`                                                                  |
 
 `training_started` 改由 `on_train_start` 回调发出，因此**初始化失败不会误报 started**（数据集错误、权重不匹配等都会直接走 `training_error`）。
 
@@ -262,12 +262,12 @@ __TRAIN_SERVICE_EVENT__={"version": 1, "event": "training_started", ...}
 
 代码与 `train_ZMQservice/train_service.py` 中的 ROI 部分一致，原样搬入 `roi.py`：
 
-| 组件 | 作用 |
-|---|---|
-| `ROIDataset` | 读取层裁剪图像与标注（bbox / segment / keypoints 同步裁剪与重归一化） |
-| `ROIValidatorMixin` | 验证批次与预测回映射到原图坐标系，mask 做仿射变换 |
-| `ROITrainerMixin` | train/val 两个 split 都建 `ROIDataset`，并把 validator 换成带 ROI 的子类 |
-| `build_roi_trainer(task, roi)` | 按 task 动态构造 `ROI{BaseTrainer}` 类 |
+| 组件                           | 作用                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| `ROIDataset`                   | 读取层裁剪图像与标注（bbox / segment / keypoints 同步裁剪与重归一化）    |
+| `ROIValidatorMixin`            | 验证批次与预测回映射到原图坐标系，mask 做仿射变换                        |
+| `ROITrainerMixin`              | train/val 两个 split 都建 `ROIDataset`，并把 validator 换成带 ROI 的子类 |
+| `build_roi_trainer(task, roi)` | 按 task 动态构造 `ROI{BaseTrainer}` 类                                   |
 
 通过 `model.train(trainer=...)` 注入（`ultralytics/engine/model.py:726,807`），**默认路径不 import 任何 ultralytics 内部类**。
 
@@ -300,13 +300,13 @@ expected input[16, 1, 640, 640] to have 3 channels, but got 1 channels instead
 
 `worker.install_gray_shim()` 在读取层把 `(H, W, 1)` 补成 `(H, W, 3)`：
 
-| 项 | 行为 |
-|---|---|
-| 生效范围 | `ultralytics.data.base`（训练/验证数据集）、`ultralytics.data.loaders`（推理）、`roi.py`（惰性 import，自动拿到补丁） |
-| 只改通道 | 其余 shape / dtype 原样返回；`flags=IMREAD_GRAYSCALE` 的调用不动，避免改掉调用方明确要灰度的路径 |
-| 安装时机 | **模块级**（`install_gray_shim()` 在 `if __name__` 之前）。Windows DataLoader 走 `spawn`，子进程重跑主模块代码；装在 `run_train()` 里 worker 拿不到补丁，表现为 8 个 dataloader worker 全崩 |
-| 幂等 | 补丁函数带 `is_gray_shim` 标记，重复调用直接返回，不套娃 |
-| 找不到就报错 | `patches.imread` 不存在 → `RuntimeError: Grayscale shim failed: ...`，不静默降级 |
+| 项           | 行为                                                                                                                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 生效范围     | `ultralytics.data.base`（训练/验证数据集）、`ultralytics.data.loaders`（推理）、`roi.py`（惰性 import，自动拿到补丁）                                                                       |
+| 只改通道     | 其余 shape / dtype 原样返回；`flags=IMREAD_GRAYSCALE` 的调用不动，避免改掉调用方明确要灰度的路径                                                                                            |
+| 安装时机     | **模块级**（`install_gray_shim()` 在 `if __name__` 之前）。Windows DataLoader 走 `spawn`，子进程重跑主模块代码；装在 `run_train()` 里 worker 拿不到补丁，表现为 8 个 dataloader worker 全崩 |
+| 幂等         | 补丁函数带 `is_gray_shim` 标记，重复调用直接返回，不套娃                                                                                                                                    |
+| 找不到就报错 | `patches.imread` 不存在 → `RuntimeError: Grayscale shim failed: ...`，不静默降级                                                                                                            |
 
 **不管位深**：只补通道，不做 uint16 → uint8 的拉伸。12/16 bit 工业 tif 会原样得到 uint16 张量，属另一个需求。
 
@@ -318,20 +318,20 @@ expected input[16, 1, 640, 640] to have 3 channels, but got 1 channels instead
 
 ## 与 train_ZMQservice 的差异
 
-| 维度 | train_ZMQservice | train-JSONservice |
-|---|---|---|
-| 执行模型 | 服务进程内开线程跑训练 | 训练在独立子进程 |
-| 传参 | ZMQ 消息体 | 临时 payload JSON 文件 |
-| 进度回传 | ZMQ PUB 推送 | stdout 事件流（父进程可再包一层接口） |
-| 动作 | train / pause / holdon / stop / status | train / stop / status / resume |
-| 续训 | `resume=True` → 去 CWD 找 checkpoint | `--resume` 从 state 的 `save_dir` 推导绝对路径 |
-| 停止 | 置 `trainer.stop`，存在双线程抢 GPU 竞态 | 杀整个进程树，无竞态 |
-| ROI 非法 | 静默回退全图 | 四项全 0 视为未启用；其余非法直接报错 |
-| 灰度 / 单通道图 | 同样崩在 conv 层 | `install_gray_shim()` 读取层补 3 通道 |
-| ROI 浮点坐标 | `TypeError: slice indices must be integers` | 进 `roi.py` 前 `int(round())` |
-| 异常回传 | 仅日志，客户端拿不到 | `training_error` 带 `error` + `traceback` |
-| 状态持久化 | 无 | `service_state.json` |
-| 协议 | 单套无版本 | 单套带 `version: 1` |
+| 维度            | train_ZMQservice                            | train-JSONservice                              |
+| --------------- | ------------------------------------------- | ---------------------------------------------- |
+| 执行模型        | 服务进程内开线程跑训练                      | 训练在独立子进程                               |
+| 传参            | ZMQ 消息体                                  | 临时 payload JSON 文件                         |
+| 进度回传        | ZMQ PUB 推送                                | stdout 事件流（父进程可再包一层接口）          |
+| 动作            | train / pause / holdon / stop / status      | train / stop / status / resume                 |
+| 续训            | `resume=True` → 去 CWD 找 checkpoint        | `--resume` 从 state 的 `save_dir` 推导绝对路径 |
+| 停止            | 置 `trainer.stop`，存在双线程抢 GPU 竞态    | 杀整个进程树，无竞态                           |
+| ROI 非法        | 静默回退全图                                | 四项全 0 视为未启用；其余非法直接报错          |
+| 灰度 / 单通道图 | 同样崩在 conv 层                            | `install_gray_shim()` 读取层补 3 通道          |
+| ROI 浮点坐标    | `TypeError: slice indices must be integers` | 进 `roi.py` 前 `int(round())`                  |
+| 异常回传        | 仅日志，客户端拿不到                        | `training_error` 带 `error` + `traceback`      |
+| 状态持久化      | 无                                          | `service_state.json`                           |
+| 协议            | 单套无版本                                  | 单套带 `version: 1`                            |
 
 原 README 记录的 17 条已知问题中，本服务已针对性解决 **#2**（续训取错 checkpoint）、**#4**（pause 时序竞态）、**#9**（ROI 静默回退）、**#11**（异常不回传）、**#14**（状态不持久化）；**#3 / #12** 因取消 pause 与加终态兜底而不再适用。
 
@@ -357,28 +357,28 @@ expected input[16, 1, 640, 640] to have 3 channels, but got 1 channels instead
 
 在本机（RTX 4060 Laptop / ultralytics 8.4.102 / conda `ultraylytics`）实测：
 
-| 用例 | 结果 |
-|---|---|
-| `python -m py_compile` 全部 5 个 py 文件 | 通过 |
-| 协议往返单测（`create_payload` → `load_payload` → `emit` → `parse_line`） | 通过 |
-| 非法 payload 拒绝 ×7（版本 / 动作 / 多余字段 / 缺 model / 未白名单参数 / paths 类型 / options 类型） | 全部拒绝 |
-| `EventLogStream` 按 `\n` 与 `\r` 切行、空行、坏 JSON 回退 | 通过 |
-| 端到端：NEU-DET 跑 1 epoch | `[START]` 带 save_dir → `[DONE]`，退出码 0 |
-| `service_state.json` 落盘 + `--status` | 通过 |
-| `--resume` 不带路径推导 `last.pt` | 路径推导正确 |
-| stop：杀进程树 + 恰好一个终态事件 + Popen 回收 + 无孤儿进程 | 通过 |
-| stop 后重启可接受 | 通过 |
-| ROI 合法配置跑通 | 通过 |
-| ROI 越界 / 宽高为 0 / 缺字段 / task 不支持 | 四种均直接报错，退出码 1 |
-| `useRoi: true` + 四项全 0 | 视为未启用，全图训练，不报错 |
-| ROI 浮点坐标（anno_studio `QRectF`） | 取整后跑通，1 epoch 退出码 0 |
-| 灰度 tif（150 train / 38 val）跑 1 epoch，`workers=8` | `[START]` → `Using 8 dataloader workers` → `[DONE]`，退出码 0 |
-| 灰度 tif + 真实 ROI 跑 1 epoch | 同上，退出码 0 |
-| shim 不改彩色 jpg / 不改 `IMREAD_GRAYSCALE` 调用 | 通过 |
-| 初始化失败不误报 `training_started` | 通过 |
-| `training_metrics` 事件（源码模式） | 字段与旧 ZMQ `metrics` 对齐 |
-| `training_metrics` 事件（打包模式） | 同上，含 `task` 字段 |
-| PyInstaller onedir 打包 | exit 0 |
-| 打包版 `--help` / `--status` / 训练 / `--resume` | 四条全部通过，训练退出码 0 |
-| 打包版 `--worker` 不泄漏到 `--help` | 通过 |
-| 状态文件不被 `training_log` / `training_metrics` 覆盖 | 通过 |
+| 用例                                                                                                 | 结果                                                          |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `python -m py_compile` 全部 5 个 py 文件                                                             | 通过                                                          |
+| 协议往返单测（`create_payload` → `load_payload` → `emit` → `parse_line`）                            | 通过                                                          |
+| 非法 payload 拒绝 ×7（版本 / 动作 / 多余字段 / 缺 model / 未白名单参数 / paths 类型 / options 类型） | 全部拒绝                                                      |
+| `EventLogStream` 按 `\n` 与 `\r` 切行、空行、坏 JSON 回退                                            | 通过                                                          |
+| 端到端：NEU-DET 跑 1 epoch                                                                           | `[START]` 带 save_dir → `[DONE]`，退出码 0                    |
+| `service_state.json` 落盘 + `--status`                                                               | 通过                                                          |
+| `--resume` 不带路径推导 `last.pt`                                                                    | 路径推导正确                                                  |
+| stop：杀进程树 + 恰好一个终态事件 + Popen 回收 + 无孤儿进程                                          | 通过                                                          |
+| stop 后重启可接受                                                                                    | 通过                                                          |
+| ROI 合法配置跑通                                                                                     | 通过                                                          |
+| ROI 越界 / 宽高为 0 / 缺字段 / task 不支持                                                           | 四种均直接报错，退出码 1                                      |
+| `useRoi: true` + 四项全 0                                                                            | 视为未启用，全图训练，不报错                                  |
+| ROI 浮点坐标（anno_studio `QRectF`）                                                                 | 取整后跑通，1 epoch 退出码 0                                  |
+| 灰度 tif（150 train / 38 val）跑 1 epoch，`workers=8`                                                | `[START]` → `Using 8 dataloader workers` → `[DONE]`，退出码 0 |
+| 灰度 tif + 真实 ROI 跑 1 epoch                                                                       | 同上，退出码 0                                                |
+| shim 不改彩色 jpg / 不改 `IMREAD_GRAYSCALE` 调用                                                     | 通过                                                          |
+| 初始化失败不误报 `training_started`                                                                  | 通过                                                          |
+| `training_metrics` 事件（源码模式）                                                                  | 字段与旧 ZMQ `metrics` 对齐                                   |
+| `training_metrics` 事件（打包模式）                                                                  | 同上，含 `task` 字段                                          |
+| PyInstaller onedir 打包                                                                              | exit 0                                                        |
+| 打包版 `--help` / `--status` / 训练 / `--resume`                                                     | 四条全部通过，训练退出码 0                                    |
+| 打包版 `--worker` 不泄漏到 `--help`                                                                  | 通过                                                          |
+| 状态文件不被 `training_log` / `training_metrics` 覆盖                                                | 通过                                                          |

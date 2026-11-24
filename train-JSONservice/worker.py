@@ -1,10 +1,9 @@
-"""训练子进程入口：读 payload、校验环境、调用 ultralytics、经 stdout 回传事件。"""
+"""训练子进程入口：读 payload、校验环境、调用 ultralytics、经 stdout 回传事件。."""
 
 import sys
 import traceback
 
 import matplotlib
-
 from protocol import EventLogStream, emit, load_payload
 
 matplotlib.use("Agg")
@@ -59,7 +58,7 @@ def build_roi_trainer(train_args):
     if missing:
         raise ValueError(f"ROI is missing fields: {missing}")
 
-    roi = tuple(int(round(float(roi_cfg[key]))) for key in required)
+    roi = tuple(round(float(roi_cfg[key])) for key in required)
     width, height = roi[2], roi[3]
     if width <= 0 or height <= 0:
         raise ValueError(f"ROI width/height must be > 0, got {roi_cfg['width']}x{roi_cfg['height']}")
@@ -73,9 +72,9 @@ def build_roi_trainer(train_args):
 def install_gray_shim():
     import cv2
     import numpy as np
-    import ultralytics.data.base as base
-    import ultralytics.data.loaders as loaders
-    import ultralytics.utils.patches as patches
+
+    from ultralytics.data import base, loaders
+    from ultralytics.utils import patches
 
     original = getattr(patches, "imread", None)
     if original is None:

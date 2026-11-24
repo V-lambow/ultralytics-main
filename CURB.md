@@ -9,12 +9,12 @@ CURB 在**训练计划完全不变**的前提下（200 epochs、每 epoch 抽样
 
 ## 1. 设计不变量（协议）
 
-| 不变量 | 实现方式 |
-| --- | --- |
-| 总 epoch 数不变 | 不触碰循环，只换 sampler 权重 |
+| 不变量                             | 实现方式                                                                                                                            |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 总 epoch 数不变                    | 不触碰循环，只换 sampler 权重                                                                                                       |
 | 每 epoch 抽样次数 = `len(dataset)` | `CurbSampler(WeightedRandomSampler)` 构造时固定 `num_samples=len(dataset)`，刷新只换权重张量、永不改预算 → LR schedule 完全不受影响 |
-| val 不参与决策 | 难度刷新只跑 train 路径的图（以 val 模式构建，保证无增广） |
-| 可复现 / 可回退 | `curb: False` 即完全回到原生 shuffle 行为（回归冒烟已验证） |
+| val 不参与决策                     | 难度刷新只跑 train 路径的图（以 val 模式构建，保证无增广）                                                                          |
+| 可复现 / 可回退                    | `curb: False` 即完全回到原生 shuffle 行为（回归冒烟已验证）                                                                         |
 
 ## 2. 机制总览（五件套）
 
@@ -62,35 +62,35 @@ d = clip( (FN + 0.5·FP + Σ_TP (1 - IoU)) / max(1, n_gt + n_pred), 0, 1 )
 
 `ultralytics/cfg/default.yaml`（Train settings 段新增）：
 
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `curb` | `False` | 总开关（bool） |
-| `curb_interval` | `25` | 刷新间隔（epoch，≥1，`CFG_INT_MIN` 拦截 0） |
-| `curb_kappa` | `2.0` | 类暴露量封顶倍数（>0，trainer 里 assert） |
-| `curb_ema` | `0.3` | 新观测的 EMA 权重（∈[0,1]，`CFG_FRACTION_KEYS` 校验） |
-| `curb_stall` | `3` | 连续多少次无改善判停滞（≥1） |
+| 键              | 默认    | 说明                                                  |
+| --------------- | ------- | ----------------------------------------------------- |
+| `curb`          | `False` | 总开关（bool）                                        |
+| `curb_interval` | `25`    | 刷新间隔（epoch，≥1，`CFG_INT_MIN` 拦截 0）           |
+| `curb_kappa`    | `2.0`   | 类暴露量封顶倍数（>0，trainer 里 assert）             |
+| `curb_ema`      | `0.3`   | 新观测的 EMA 权重（∈[0,1]，`CFG_FRACTION_KEYS` 校验） |
+| `curb_stall`    | `3`     | 连续多少次无改善判停滞（≥1）                          |
 
 固定常量（不进配置，`ultralytics/data/curb.py` 顶部）：
 
-| 常量 | 值 | 含义 |
-| --- | --- | --- |
-| `CLIP` | `(0.3, 6.0)` | 图级权重裁剪区间 |
-| `POW` | `0.5` | 难度比指数（温和课程） |
-| `MATCH_IOU` | `0.5` | 匹配 IoU 阈值 |
-| `FP_PENALTY` | `0.5` | 虚检的罚分权重（=1 个漏检的一半） |
-| `STALL_ABS` / `STALL_REL` | `0.005` / `0.01` | 停滞判定的绝对/相对改善门槛 |
-| `QUOTA_PASSES` | `5` | 配额定点迭代上限 |
-| `DIFFICULTY_EPS` | `1e-6` | 中位难度低于此值视为全图同难度 → 权重全 1 |
+| 常量                      | 值               | 含义                                      |
+| ------------------------- | ---------------- | ----------------------------------------- |
+| `CLIP`                    | `(0.3, 6.0)`     | 图级权重裁剪区间                          |
+| `POW`                     | `0.5`            | 难度比指数（温和课程）                    |
+| `MATCH_IOU`               | `0.5`            | 匹配 IoU 阈值                             |
+| `FP_PENALTY`              | `0.5`            | 虚检的罚分权重（=1 个漏检的一半）         |
+| `STALL_ABS` / `STALL_REL` | `0.005` / `0.01` | 停滞判定的绝对/相对改善门槛               |
+| `QUOTA_PASSES`            | `5`              | 配额定点迭代上限                          |
+| `DIFFICULTY_EPS`          | `1e-6`           | 中位难度低于此值视为全图同难度 → 权重全 1 |
 
 ## 4. 逐文件修改点
 
-| 文件 | 改动 |
-| --- | --- |
-| `ultralytics/data/curb.py`（新建，~300 行） | `CurbSampler`（固定预算加权采样器，`update()` 原地换权重）；`_match`/`_image_difficulty`（贪心匹配+难度打分）；`_evaluate`（`@smart_inference_mode` 全训练集难度 pass，镜像 validator）；`_refresh`（EMA→权重→止损→配额→切换→日志）；`_log_csv`/`_log_review`（产物写出）；`curb_on_fit_epoch_end`（回调入口，跳过条件 `trainer.stop or epoch % interval`） |
-| `ultralytics/cfg/default.yaml` | 新增 `# Curriculum resampling (CURB)` 段 5 个键（`compile:` 之后） |
-| `ultralytics/cfg/__init__.py` | 类型注册：`curb`→`CFG_BOOL_KEYS`；`curb_kappa`→`CFG_FLOAT_KEYS`；`curb_ema`→`CFG_FRACTION_KEYS`；`curb_interval`/`curb_stall`→`CFG_INT_KEYS` + `CFG_INT_MIN=1`（防除零） |
-| `ultralytics/data/build.py` | `build_dataloader` 新增 `sampler=None` 参数：传入时优先于 shuffle/分布式 sampler（`samples = len(sampler)`，预算即采样器长度）；rank 分支改为 `if sampler is None and rank != -1` |
-| `ultralytics/models/yolo/detect/train.py` | ① `__init__`：`self._curb=None`；`curb` 开启且 `task=detect` 时初始化状态 `{d, mu, stall, sampler}`、注册 `on_fit_epoch_end` 回调、非 resume 时截断 `curb.csv`/`curb_review.txt`（镜像 `results.csv` 语义）；其他任务打 warning 后保持关闭；`curb_kappa > 0` assert。② `get_dataloader`：train 分支创建/复用 `CurbSampler`（OOM 重建 dataloader 时沿用同一实例与权重），`assert rank == -1`（DDP 不支持，fail-fast），并把 `sampler` 传给 `build_dataloader` |
+| 文件                                        | 改动                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ultralytics/data/curb.py`（新建，~300 行） | `CurbSampler`（固定预算加权采样器，`update()` 原地换权重）；`_match`/`_image_difficulty`（贪心匹配+难度打分）；`_evaluate`（`@smart_inference_mode` 全训练集难度 pass，镜像 validator）；`_refresh`（EMA→权重→止损→配额→切换→日志）；`_log_csv`/`_log_review`（产物写出）；`curb_on_fit_epoch_end`（回调入口，跳过条件 `trainer.stop or epoch % interval`）                                                                                                  |
+| `ultralytics/cfg/default.yaml`              | 新增 `# Curriculum resampling (CURB)` 段 5 个键（`compile:` 之后）                                                                                                                                                                                                                                                                                                                                                                                           |
+| `ultralytics/cfg/__init__.py`               | 类型注册：`curb`→`CFG_BOOL_KEYS`；`curb_kappa`→`CFG_FLOAT_KEYS`；`curb_ema`→`CFG_FRACTION_KEYS`；`curb_interval`/`curb_stall`→`CFG_INT_KEYS` + `CFG_INT_MIN=1`（防除零）                                                                                                                                                                                                                                                                                     |
+| `ultralytics/data/build.py`                 | `build_dataloader` 新增 `sampler=None` 参数：传入时优先于 shuffle/分布式 sampler（`samples = len(sampler)`，预算即采样器长度）；rank 分支改为 `if sampler is None and rank != -1`                                                                                                                                                                                                                                                                            |
+| `ultralytics/models/yolo/detect/train.py`   | ① `__init__`：`self._curb=None`；`curb` 开启且 `task=detect` 时初始化状态 `{d, mu, stall, sampler}`、注册 `on_fit_epoch_end` 回调、非 resume 时截断 `curb.csv`/`curb_review.txt`（镜像 `results.csv` 语义）；其他任务打 warning 后保持关闭；`curb_kappa > 0` assert。② `get_dataloader`：train 分支创建/复用 `CurbSampler`（OOM 重建 dataloader 时沿用同一实例与权重），`assert rank == -1`（DDP 不支持，fail-fast），并把 `sampler` 传给 `build_dataloader` |
 
 改动总量：4 个文件 +43/-7 行，新增 1 个文件；`ruff format` / `ruff check` 对新增文件全绿（仓库存量 8 个 lint 告警为 ruff 0.16 默认规则集扩大所致，均在本次未触碰的行上）。
 
@@ -118,9 +118,15 @@ python run_yolo26_train.py --model yolo26n.pt --data defects.yaml --epochs 200 \
 ```python
 # Python
 from ultralytics import YOLO
+
 YOLO("yolo26n.pt").train(
-    data="defects.yaml", epochs=200,
-    curb=True, curb_interval=25, curb_kappa=2.0, curb_ema=0.3, curb_stall=3,
+    data="defects.yaml",
+    epochs=200,
+    curb=True,
+    curb_interval=25,
+    curb_kappa=2.0,
+    curb_ema=0.3,
+    curb_stall=3,
 )
 ```
 
@@ -128,11 +134,11 @@ YOLO("yolo26n.pt").train(
 
 ## 7. 验证（coco8 冒烟，YOLO26n，RTX 4060）
 
-| 阶段 | 内容 | 结果 |
-| --- | --- | --- |
-| 回归 | `curb=False` 训 1 epoch | 行为与原生一致，`trainer._curb is None`，`results.csv` 正常 ✅ |
-| 主流程 | `curb=True curb_interval=1 curb_stall=1` 训 4 epoch | 3 次刷新（epoch 1/2/3，末轮按设计跳过）；预算不变量 `num_samples == len(dataset)` ✅；`curb.csv` 240 行 = 3×80 类 ✅；停滞计数只落在实际存在的 7 个类上、其余 73 类恒 0 ✅；`_log_review` 产出头 + 最难图 ✅ |
-| 续训 | 训练中途抓取未 strip 的 `mid.pt`（epoch 1，optimizer 完整）→ 改 `epochs=6` resume | 状态从 ckpt args 正确重挂 `curb=True` ✅；刷新记录追加 [3,4,5]（末轮跳过），`curb.csv` 241→481 行 ✅；`curb_review.txt` 未被截断（哨兵保留）✅ |
+| 阶段   | 内容                                                                              | 结果                                                                                                                                                                                                         |
+| ------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 回归   | `curb=False` 训 1 epoch                                                           | 行为与原生一致，`trainer._curb is None`，`results.csv` 正常 ✅                                                                                                                                               |
+| 主流程 | `curb=True curb_interval=1 curb_stall=1` 训 4 epoch                               | 3 次刷新（epoch 1/2/3，末轮按设计跳过）；预算不变量 `num_samples == len(dataset)` ✅；`curb.csv` 240 行 = 3×80 类 ✅；停滞计数只落在实际存在的 7 个类上、其余 73 类恒 0 ✅；`_log_review` 产出头 + 最难图 ✅ |
+| 续训   | 训练中途抓取未 strip 的 `mid.pt`（epoch 1，optimizer 完整）→ 改 `epochs=6` resume | 状态从 ckpt args 正确重挂 `curb=True` ✅；刷新记录追加 [3,4,5]（末轮跳过），`curb.csv` 241→481 行 ✅；`curb_review.txt` 未被截断（哨兵保留）✅                                                               |
 
 注：随机初始化初期模型检不出任何框，难度全为 1 → 中位数法自然退化为均匀权重（`weight range [1.00, 1.00]`），这是设计内行为，冒烟断言对此分支做了区分处理。
 
