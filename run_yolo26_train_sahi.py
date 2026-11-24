@@ -17,16 +17,27 @@ def parseArgs():
     default_device = "0" if use_cuda else "cpu"
 
     parser = argparse.ArgumentParser(description="YOLO26 SAHI Sliced Training Script (detect bbox labels only)")
-    parser.add_argument("--model", type=str, default="./models/yolov8m.pt", help="model name e.g. yolo26n.pt, yolo26s.pt, yolo26m.pt")
-    parser.add_argument("--data", type=str, default="coco8.yaml", help="YOLO dataset config e.g. coco8.yaml, path/to/data.yaml")
+    parser.add_argument(
+        "--model", type=str, default="./models/yolov8m.pt", help="model name e.g. yolo26n.pt, yolo26s.pt, yolo26m.pt"
+    )
+    parser.add_argument(
+        "--data", type=str, default="coco8.yaml", help="YOLO dataset config e.g. coco8.yaml, path/to/data.yaml"
+    )
     parser.add_argument("--output", type=str, default="runs/sahi_data", help="sliced dataset output directory")
     parser.add_argument("--slice-height", type=int, default=512, help="slice height")
     parser.add_argument("--slice-width", type=int, default=512, help="slice width")
     parser.add_argument("--overlap-height-ratio", type=float, default=0.2, help="slice overlap ratio in height")
     parser.add_argument("--overlap-width-ratio", type=float, default=0.2, help="slice overlap ratio in width")
-    parser.add_argument("--min-area-ratio", type=float, default=0.1, help="drop annotations smaller than this ratio of their original area")
+    parser.add_argument(
+        "--min-area-ratio",
+        type=float,
+        default=0.1,
+        help="drop annotations smaller than this ratio of their original area",
+    )
     parser.add_argument("--skip-slice", action="store_true", help="reuse existing sliced dataset in --output")
-    parser.add_argument("--symlink", action="store_true", help="symlink images instead of copying them into the YOLO dataset")
+    parser.add_argument(
+        "--symlink", action="store_true", help="symlink images instead of copying them into the YOLO dataset"
+    )
     parser.add_argument("--epochs", type=int, default=100, help="number of training epochs")
     parser.add_argument("--batch", type=int, default=16, help="batch size")
     parser.add_argument("--imgsz", type=int, default=640, help="image size")
@@ -40,7 +51,9 @@ def parseArgs():
     parser.add_argument("--lr0", type=float, default=0.01, help="initial learning rate")
     parser.add_argument("--patience", type=int, default=100, help="early stopping patience")
     parser.add_argument("--resume", action="store_true", help="resume training from last checkpoint")
-    parser.add_argument("--amp", action="store_true", default=use_cuda, help="Automatic Mixed Precision (auto-off on CPU)")
+    parser.add_argument(
+        "--amp", action="store_true", default=use_cuda, help="Automatic Mixed Precision (auto-off on CPU)"
+    )
     parser.add_argument("--no-amp", dest="amp", action="store_false", help="disable AMP")
     parser.add_argument("--cache", type=str, default="False", help="cache images: True, ram, disk, or False")
     parser.add_argument("--plots", action="store_true", default=True, help="save plots and images")
@@ -49,10 +62,14 @@ def parseArgs():
     parser.add_argument("--seed", type=int, default=0, help="random seed")
     parser.add_argument("--cos-lr", action="store_true", help="cosine learning rate scheduler")
     parser.add_argument("--close-mosaic", type=int, default=10, help="disable mosaic for final N epochs")
-    parser.add_argument("--curb", action="store_true", help="enable CURB difficulty-based train resampling (detect only)")
+    parser.add_argument(
+        "--curb", action="store_true", help="enable CURB difficulty-based train resampling (detect only)"
+    )
     parser.add_argument("--curb-interval", type=int, default=25, help="epochs between CURB difficulty refreshes")
     parser.add_argument("--curb-kappa", type=float, default=2.0, help="CURB per-class exposure cap multiple")
-    parser.add_argument("--curb-ema", type=float, default=0.3, help="CURB EMA weight on the newest difficulty observation")
+    parser.add_argument(
+        "--curb-ema", type=float, default=0.3, help="CURB EMA weight on the newest difficulty observation"
+    )
     parser.add_argument("--curb-stall", type=int, default=3, help="CURB refreshes without improvement before stop-loss")
     return parser.parse_args()
 
@@ -106,7 +123,9 @@ def yoloToCoco(image_paths, names, out_json):
             if not parts:
                 continue
             if len(parts) != 5:
-                raise ValueError(f"Only xywh bbox labels are supported, got {len(parts) - 1} values: {label_path}:{line_no}")
+                raise ValueError(
+                    f"Only xywh bbox labels are supported, got {len(parts) - 1} values: {label_path}:{line_no}"
+                )
             cls_id = int(float(parts[0]))
             if not 0 <= cls_id < len(names):
                 raise ValueError(f"Class id {cls_id} out of range [0, {len(names) - 1}]: {label_path}:{line_no}")

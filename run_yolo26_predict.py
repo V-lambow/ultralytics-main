@@ -1,6 +1,8 @@
-from ultralytics import YOLO
 import argparse
+
 import torch
+
+from ultralytics import YOLO
 
 
 def main():
@@ -8,8 +10,15 @@ def main():
     default_device = "0" if use_cuda else "cpu"
 
     parser = argparse.ArgumentParser(description="YOLO26 Prediction Script")
-    parser.add_argument("--model", type=str, default="yolo26n.pt", help="model path e.g. yolo26n.pt, runs/detect/train/weights/best.pt")
-    parser.add_argument("--source", type=str, default="ultralytics/assets/bus.jpg", help="image/video/dir/URL/stream e.g. 0 for webcam, path/to/image.jpg, folder/")
+    parser.add_argument(
+        "--model", type=str, default="yolo26n.pt", help="model path e.g. yolo26n.pt, runs/detect/train/weights/best.pt"
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default="ultralytics/assets/bus.jpg",
+        help="image/video/dir/URL/stream e.g. 0 for webcam, path/to/image.jpg, folder/",
+    )
     parser.add_argument("--imgsz", type=int, default=640, help="inference image size")
     parser.add_argument("--conf", type=float, default=0.25, help="confidence threshold")
     parser.add_argument("--iou", type=float, default=0.7, help="IoU threshold for NMS")
@@ -32,7 +41,9 @@ def main():
     parser.add_argument("--show-conf", action="store_true", default=True, help="show confidence")
     parser.add_argument("--show-boxes", action="store_true", default=True, help="show boxes")
     parser.add_argument("--retina-masks", action="store_true", help="high-res segmentation masks")
-    parser.add_argument("--task", type=str, default="detect", choices=["detect", "segment", "classify", "pose", "obb"], help="task type")
+    parser.add_argument(
+        "--task", type=str, default="detect", choices=["detect", "segment", "classify", "pose", "obb"], help="task type"
+    )
     args = parser.parse_args()
 
     model = YOLO(args.model)

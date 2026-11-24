@@ -1,11 +1,12 @@
-import requests
-import time
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
-IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
+import requests
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 
 def collect_images(folder_path):

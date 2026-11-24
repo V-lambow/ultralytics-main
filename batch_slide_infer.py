@@ -1,27 +1,37 @@
 import importlib.metadata
+
 _orig_read_text = importlib.metadata.PathDistribution.read_text
+
+
 def _safe_read_text(self, name):
     try:
         return _orig_read_text(self, name)
     except UnicodeDecodeError:
         return None
+
+
 importlib.metadata.PathDistribution.read_text = _safe_read_text
 
 import argparse
 import os
 import sys
+
 import cv2
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+
 from ultralytics import YOLO
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 # ─── 滑窗核心函数（复用自 detect_server_slidewind.py） ───────────────────────
+
 
 def compute_iou(box_a, box_b):
     x1 = max(box_a[0], box_b[0])
@@ -106,13 +116,13 @@ def extract_window(img, roi, border_expand):
     src_h = valid_y2 - valid_y1
     src_w = valid_x2 - valid_x1
     if src_h > 0 and src_w > 0:
-        window[dst_y:dst_y + src_h, dst_x:dst_x + src_w] = img[valid_y1:valid_y2, valid_x1:valid_x2]
+        window[dst_y : dst_y + src_h, dst_x : dst_x + src_w] = img[valid_y1:valid_y2, valid_x1:valid_x2]
     return window, (ext_y1, ext_x1)
 
 
 def map_boxes_to_original(results, offset, roi, border_expand, img_shape):
     offset_y, offset_x = offset
-    img_h, img_w = img_shape[:2]
+    _img_h, _img_w = img_shape[:2]
     detections = []
     for result in results:
         boxes = result.boxes
@@ -131,18 +141,20 @@ def map_boxes_to_original(results, offset, roi, border_expand, img_shape):
             clip_y2 = min(orig_y2, roi[2])
             if clip_x1 >= clip_x2 or clip_y1 >= clip_y2:
                 continue
-            detections.append({
-                "code": class_name,
-                "box": [int(orig_x1), int(orig_y1), int(orig_x2), int(orig_y2)],
-                "confidence": confidence,
-            })
+            detections.append(
+                {
+                    "code": class_name,
+                    "box": [int(orig_x1), int(orig_y1), int(orig_x2), int(orig_y2)],
+                    "confidence": confidence,
+                }
+            )
     return detections
 
 
 # ─── 单张大图滑窗推理 ──────────────────────────────────────────────────────
 
-def slide_window_inference(model, img, slide_rows, slide_cols, overlap_pixels,
-                           border_expand, imgsz, conf):
+
+def slide_window_inference(model, img, slide_rows, slide_cols, overlap_pixels, border_expand, imgsz, conf):
     img_height, img_width = img.shape[:2]
     positions = calculate_slide_positions(img_height, img_width, slide_rows, slide_cols, overlap_pixels)
     all_detections = []
@@ -157,6 +169,7 @@ def slide_window_inference(model, img, slide_rows, slide_cols, overlap_pixels,
 
 
 # ─── 绘制 HBB ──────────────────────────────────────────────────────────────
+
 
 def draw_hbb(img, detections):
     for det in detections:
@@ -173,6 +186,7 @@ def draw_hbb(img, detections):
 
 # ─── 柱状图 ────────────────────────────────────────────────────────────────
 
+
 def plot_bar_chart(class_counts, save_path):
     if not class_counts:
         print("未检测到任何目标，跳过柱状图生成")
@@ -180,11 +194,18 @@ def plot_bar_chart(class_counts, save_path):
     names = sorted(class_counts.keys())
     counts = [class_counts[n] for n in names]
     colors = plt.cm.Set3(np.linspace(0, 1, len(names)))
-    fig, ax = plt.subplots(figsize=(max(8, len(names) * 1.2), 6))
+    _fig, ax = plt.subplots(figsize=(max(8, len(names) * 1.2), 6))
     bars = ax.bar(names, counts, color=colors, edgecolor="black", linewidth=0.5)
     for bar, c in zip(bars, counts):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
-                str(c), ha="center", va="bottom", fontsize=10, fontweight="bold")
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.3,
+            str(c),
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            fontweight="bold",
+        )
     ax.set_xlabel("Class", fontsize=12)
     ax.set_ylabel("Count", fontsize=12)
     ax.set_title("Detection Class Distribution", fontsize=14)
@@ -196,6 +217,7 @@ def plot_bar_chart(class_counts, save_path):
 
 
 # ─── main ───────────────────────────────────────────────────────────────────
+
 
 def main():
     parser = argparse.ArgumentParser(description="滑动窗口批量 YOLO 推理")
@@ -215,15 +237,16 @@ def main():
         sys.exit(1)
 
     # 收集图片
-    images = sorted([f for f in os.listdir(data_dir)
-                     if Path(f).suffix.lower() in IMAGE_EXTS])
+    images = sorted([f for f in os.listdir(data_dir) if Path(f).suffix.lower() in IMAGE_EXTS])
     if not images:
         print("文件夹内没有找到图片文件")
         sys.exit(1)
 
     print(f"共找到 {len(images)} 张图片")
-    print(f"滑窗参数: {args.slide_rows}x{args.slide_cols}, "
-          f"overlap={args.overlap_pixels}px, border_expand={args.border_expand}px")
+    print(
+        f"滑窗参数: {args.slide_rows}x{args.slide_cols}, "
+        f"overlap={args.overlap_pixels}px, border_expand={args.border_expand}px"
+    )
     print(f"模型: {args.model}, imgsz={args.imgsz}, conf={args.conf}")
     print("-" * 60)
 
@@ -244,8 +267,7 @@ def main():
             continue
 
         detections = slide_window_inference(
-            model, img, args.slide_rows, args.slide_cols,
-            args.overlap_pixels, args.border_expand, args.imgsz, args.conf
+            model, img, args.slide_rows, args.slide_cols, args.overlap_pixels, args.border_expand, args.imgsz, args.conf
         )
 
         for det in detections:
@@ -260,13 +282,14 @@ def main():
             ok_count += 1
             save_dir = os.path.join("assert", "detail", "ok")
         else:
-            first_code = sorted({d["code"] for d in detections})[0]
+            first_code = min({d["code"] for d in detections})
             save_dir = os.path.join("assert", "detail", first_code)
         os.makedirs(save_dir, exist_ok=True)
         cv2.imwrite(os.path.join(save_dir, img_name), vis)
 
-        defect_str = ", ".join(f"{k}:{v}" for k, v in
-                               sorted(defaultdict(int, {d["code"]: 1 for d in detections}).items()))
+        defect_str = ", ".join(
+            f"{k}:{v}" for k, v in sorted(defaultdict(int, {d["code"]: 1 for d in detections}).items())
+        )
         print(f"[{idx}/{len(images)}] {img_name} -> {len(detections)} defects [{defect_str}]")
 
     print("-" * 60)

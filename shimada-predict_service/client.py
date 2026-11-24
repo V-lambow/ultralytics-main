@@ -18,6 +18,7 @@ kImageNotFound = -1004
 
 def makeTestImage(width, height):
     from PIL import Image, ImageDraw
+
     img = Image.new("RGB", (width, height), (32, 32, 40))
     draw = ImageDraw.Draw(img)
     for _ in range(150):
@@ -65,7 +66,9 @@ def buildPathPayload(fileNames, relativeDir, args):
 def postJson(url, payload, timeoutSec):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
-        url, data=body, method="POST",
+        url,
+        data=body,
+        method="POST",
         headers={"Content-Type": "application/json"},
     )
     startMs = time.perf_counter()
@@ -102,8 +105,10 @@ def printResult(status, resp, elapsedMs, err):
         results = data.get("results") or []
         print(f"defects     : {len(results)}")
         for r in results:
-            print(f"  - file={r.get('file_name')} code={r.get('code')} score={r.get('score')} "
-                  f"area={r.get('area')} length={r.get('length')} box={r.get('box')}")
+            print(
+                f"  - file={r.get('file_name')} code={r.get('code')} score={r.get('score')} "
+                f"area={r.get('area')} length={r.get('length')} box={r.get('box')}"
+            )
 
 
 def cmdGenImages(args):
@@ -162,53 +167,78 @@ def cmdTestErrors(args):
         }
 
     cases = [
-        ("valid base64 request",
-         {**basePayload(), "file_names": [name], "images_base64": [b64Image]}, kOk),
-        ("missing job_id",
-         {"sample_id": args.sampleId, "pose_id": args.poseId,
-          "file_names": [name], "images_base64": [b64Image]},
-         kInvalidParam),
-        ("missing sample_id",
-         {"job_id": defaultJobId(), "pose_id": args.poseId,
-          "file_names": [name], "images_base64": [b64Image]},
-         kInvalidParam),
-        ("file_names/images_base64 length mismatch",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": [name, name], "images_base64": [b64Image]},
-         kInvalidParam),
-        ("empty file_names",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": [], "images_base64": []},
-         kInvalidParam),
-        ("images_base64 and relative_dir both present",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": [name],
-          "images_base64": [b64Image], "relative_dir": "demo/"},
-         kInvalidParam),
-        ("neither images_base64 nor relative_dir",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": [name]},
-         kInvalidParam),
-        ("empty file name",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": [" "], "images_base64": [b64Image]},
-         kInvalidImageName),
-        ("illegal file name",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": ["a|b<img>.jpg"], "images_base64": [b64Image]},
-         kInvalidImageName),
-        ("unsupported file extension",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": ["ghost.exe"], "images_base64": [b64Image]},
-         kInvalidImageName),
-        ("corrupted base64 image",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": [name], "images_base64": ["@@not-base64@@"]},
-         kImageNotFound),
-        ("empty base64 image",
-         {**basePayload(), "job_id": defaultJobId(), "file_names": [name], "images_base64": [""]},
-         kImageNotFound),
-        ("image not found on share",
-         {**basePayload(), "job_id": defaultJobId(),
-          "file_names": ["ghost.jpg"], "relative_dir": "no_such_dir/"},
-         kImageNotFound),
+        ("valid base64 request", {**basePayload(), "file_names": [name], "images_base64": [b64Image]}, kOk),
+        (
+            "missing job_id",
+            {"sample_id": args.sampleId, "pose_id": args.poseId, "file_names": [name], "images_base64": [b64Image]},
+            kInvalidParam,
+        ),
+        (
+            "missing sample_id",
+            {"job_id": defaultJobId(), "pose_id": args.poseId, "file_names": [name], "images_base64": [b64Image]},
+            kInvalidParam,
+        ),
+        (
+            "file_names/images_base64 length mismatch",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": [name, name], "images_base64": [b64Image]},
+            kInvalidParam,
+        ),
+        (
+            "empty file_names",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": [], "images_base64": []},
+            kInvalidParam,
+        ),
+        (
+            "images_base64 and relative_dir both present",
+            {
+                **basePayload(),
+                "job_id": defaultJobId(),
+                "file_names": [name],
+                "images_base64": [b64Image],
+                "relative_dir": "demo/",
+            },
+            kInvalidParam,
+        ),
+        (
+            "neither images_base64 nor relative_dir",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": [name]},
+            kInvalidParam,
+        ),
+        (
+            "empty file name",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": [" "], "images_base64": [b64Image]},
+            kInvalidImageName,
+        ),
+        (
+            "illegal file name",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": ["a|b<img>.jpg"], "images_base64": [b64Image]},
+            kInvalidImageName,
+        ),
+        (
+            "unsupported file extension",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": ["ghost.exe"], "images_base64": [b64Image]},
+            kInvalidImageName,
+        ),
+        (
+            "corrupted base64 image",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": [name], "images_base64": ["@@not-base64@@"]},
+            kImageNotFound,
+        ),
+        (
+            "empty base64 image",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": [name], "images_base64": [""]},
+            kImageNotFound,
+        ),
+        (
+            "image not found on share",
+            {**basePayload(), "job_id": defaultJobId(), "file_names": ["ghost.jpg"], "relative_dir": "no_such_dir/"},
+            kImageNotFound,
+        ),
     ]
     passed = 0
     failed = 0
     for title, payload, expected in cases:
-        status, resp, elapsedMs, err = postJson(args.url, payload, args.timeout)
+        _status, resp, elapsedMs, err = postJson(args.url, payload, args.timeout)
         actual = None if (err or resp is None) else resp.get("error_code")
         ok = actual == expected
         passed += 1 if ok else 0
@@ -235,8 +265,9 @@ def parseArgs():
     gen.add_argument("--height", type=int, default=1440, help="image height")
 
     sendB64 = sub.add_parser("send-base64", help="send request with base64-encoded images")
-    sendB64.add_argument("--images", nargs="+", default=None,
-                         help="local image paths; omit to auto-generate one test image")
+    sendB64.add_argument(
+        "--images", nargs="+", default=None, help="local image paths; omit to auto-generate one test image"
+    )
 
     sendPath = sub.add_parser("send-path", help="send request with shared-folder relative paths")
     sendPath.add_argument("--dir", required=True, help="relative dir under the server share root")

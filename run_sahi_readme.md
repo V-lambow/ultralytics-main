@@ -6,10 +6,10 @@ SAHI（Slicing Aided Hyper Inference）把大图切成带重叠的小块分别�
 
 本目录提供两个脚本：
 
-| 文件 | 功能 |
-|---|---|
-| `run_yolo26_predict_sahi.py` | 切片推理：单图 / 文件夹 / 视频 / 网络流 / 摄像头 |
-| `run_yolo26_train_sahi.py` | 切片训练：YOLO 数据集 → 切片 → 转 YOLO 格式 → 训练 |
+| 文件                         | 功能                                               |
+| ---------------------------- | -------------------------------------------------- |
+| `run_yolo26_predict_sahi.py` | 切片推理：单图 / 文件夹 / 视频 / 网络流 / 摄像头   |
+| `run_yolo26_train_sahi.py`   | 切片训练：YOLO 数据集 → 切片 → 转 YOLO 格式 → 训练 |
 
 > SAHI 本身是纯推理库，没有训练 API。训练脚本的做法是先用 SAHI 把数据集切片，再用 ultralytics 在切片上训练（小目标数据集的标准做法）。
 

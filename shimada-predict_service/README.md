@@ -11,33 +11,33 @@
 
 ## 1. 协议要点（实现依据）
 
-| 项 | 约定 |
-|---|---|
-| 协议 | JSON + HTTP，UTF-8 编码 |
-| 接口地址 | `http://127.0.0.1:9000/image_defect`（POST） |
+| 项       | 约定                                                                                                            |
+| -------- | --------------------------------------------------------------------------------------------------------------- |
+| 协议     | JSON + HTTP，UTF-8 编码                                                                                         |
+| 接口地址 | `http://127.0.0.1:9000/image_defect`（POST）                                                                    |
 | 传图方式 | ① `images_base64`：base64 字符串数组，与 `file_names` 一一对应；② `relative_dir`：共享盘相对目录 + `file_names` |
-| 业务错误 | 通过 JSON 顶层 `error_code` / `error_msg` 表达 |
+| 业务错误 | 通过 JSON 顶层 `error_code` / `error_msg` 表达                                                                  |
 
 错误码表（两个程序中各自定义了同一份常量表，见 §4.1 与 §5.1）：
 
-| error_code | error_msg | 触发条件 |
-|---|---|---|
-| 0 | `OK` | 推理成功 |
-| -1001 | 系统错误：未知错误 | 服务端未捕获异常 |
-| -1002 | 参数错误：参数不合法 | JSON 非法 / 缺字段 / 字段类型错 / 两种传图方式冲突 |
-| -1003 | 参数错误：图片名称错误 | 文件名为空、含非法字符或扩展名不受支持 |
-| -1004 | 参数错误：图片数据不存在 | base64 解码失败、解码结果为空、图片无法解码，或共享盘文件不存在 |
+| error_code | error_msg                | 触发条件                                                        |
+| ---------- | ------------------------ | --------------------------------------------------------------- |
+| 0          | `OK`                     | 推理成功                                                        |
+| -1001      | 系统错误：未知错误       | 服务端未捕获异常                                                |
+| -1002      | 参数错误：参数不合法     | JSON 非法 / 缺字段 / 字段类型错 / 两种传图方式冲突              |
+| -1003      | 参数错误：图片名称错误   | 文件名为空、含非法字符或扩展名不受支持                          |
+| -1004      | 参数错误：图片数据不存在 | base64 解码失败、解码结果为空、图片无法解码，或共享盘文件不存在 |
 
 请求示例（base64 方式）：
 
 ```json
 {
-    "job_id": "20210403120516",
-    "sample_id": "S00001",
-    "pose_id": "P01",
-    "file_names": ["S00001_C01_P01_L0_20201024100008.jpg"],
-    "images_base64": ["<base64...>"],
-    "ext_params": {"xxxx1": "value1"}
+  "job_id": "20210403120516",
+  "sample_id": "S00001",
+  "pose_id": "P01",
+  "file_names": ["S00001_C01_P01_L0_20201024100008.jpg"],
+  "images_base64": ["<base64...>"],
+  "ext_params": { "xxxx1": "value1" }
 }
 ```
 
@@ -47,35 +47,43 @@
 
 ```json
 {
-    "error_code": 0,
-    "error_msg": "OK",
-    "data": {
-        "job_id": "...", "sample_id": "S00001", "pose_id": "P01",
-        "file_names": ["..."],
-        "image_width": 1920, "image_height": 1440, "grayscale": 0,
-        "results": [
-            {
-                "code": "ZM", "score": 0.4545, "area": 1596,
-                "length": 1000, "volume": 1000,
-                "box": [100, 100, 200, 200],
-                "polygon": [], "defect_raw": []
-            }
-        ],
-        "alg_raw": []
-    }
+  "error_code": 0,
+  "error_msg": "OK",
+  "data": {
+    "job_id": "...",
+    "sample_id": "S00001",
+    "pose_id": "P01",
+    "file_names": ["..."],
+    "image_width": 1920,
+    "image_height": 1440,
+    "grayscale": 0,
+    "results": [
+      {
+        "code": "ZM",
+        "score": 0.4545,
+        "area": 1596,
+        "length": 1000,
+        "volume": 1000,
+        "box": [100, 100, 200, 200],
+        "polygon": [],
+        "defect_raw": []
+      }
+    ],
+    "alg_raw": []
+  }
 }
 ```
 
 ### 1.1 关键设计决策
 
-| 决策 | 说明 |
-|---|---|
-| 业务错误也返回 HTTP 200 | 协议文档未定义 HTTP 状态码语义，且其 C# 示例仅在 `HttpStatusCode.OK` 分支解析响应体。因此所有业务错误（-1002/-1003/-1004）一律返回 200 + 错误码；仅"路径不存在 / 无法路由"返回 404。 |
+| 决策                           | 说明                                                                                                                                                                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 业务错误也返回 HTTP 200        | 协议文档未定义 HTTP 状态码语义，且其 C# 示例仅在 `HttpStatusCode.OK` 分支解析响应体。因此所有业务错误（-1002/-1003/-1004）一律返回 200 + 错误码；仅"路径不存在 / 无法路由"返回 404。                             |
 | `results[].file_name` 附加字段 | 协议响应的 `results` 条目无归属字段，但请求支持多图。为便于多图联调，每个缺陷条目附加 `file_name` 标识来源图片。这是**协议扩展字段**，C# 端按 `JObject` 解析不受影响；不需要时可在 `processRequest` 中删除该行。 |
-| 多图的 `image_width/height` | 协议响应中分辨率是单值，多图请求取**第一张图**的尺寸。 |
-| `ext_params` 不回传 | 协议响应结构无此字段，服务端仅接收、不校验内容、不回传。 |
-| 双程序各自持有一份错误码常量 | 换取 `client.py` 可脱离 `server.py` 独立分发给对接方；常量表改动时两边需同步。 |
-| `error_msg` 中文文案 | 与协议错误码表原文一致；`error_code` 才是对接方应判断的字段。 |
+| 多图的 `image_width/height`    | 协议响应中分辨率是单值，多图请求取**第一张图**的尺寸。                                                                                                                                                           |
+| `ext_params` 不回传            | 协议响应结构无此字段，服务端仅接收、不校验内容、不回传。                                                                                                                                                         |
+| 双程序各自持有一份错误码常量   | 换取 `client.py` 可脱离 `server.py` 独立分发给对接方；常量表改动时两边需同步。                                                                                                                                   |
+| `error_msg` 中文文案           | 与协议错误码表原文一致；`error_code` 才是对接方应判断的字段。                                                                                                                                                    |
 
 ---
 
@@ -118,15 +126,15 @@
 
 **服务端各步骤的提前退出点**（校验失败的请求不占推理锁、毫秒级返回）：
 
-| 失败点 | 条件 | 客户端收到 | 推理资源是否消耗 |
-|---|---|---|---|
-| ⑥ 路径不匹配 | URL 打错 / 用 GET | 404 + -1002，**连接被服务端关闭**（Connection: close） | 否 |
-| ⑥/⑦ 长度检查 | body 缺失、> 256MB、chunked 无 Content-Length | 200 + -1002，**连接被服务端关闭** | 否 |
-| ⑧ JSON 解析 | 非 JSON / 非 UTF-8 | 200 + -1002 | 否 |
-| ⑨ 结构校验 | 缺字段、类型错、两种传图方式冲突 | 200 + -1002 | 否 |
-| ⑨ 文件名校验 | 空白名、非法字符、扩展名不支持 | 200 + -1003 | 否 |
-| ⑩ 装图 | base64 解码失败、共享盘文件不存在、图片解不开 | 200 + -1004 | 否 |
-| ⑪ 推理异常 | 引擎内部错误（整体失败，无部分成功） | 200 + -1001，查服务端 [ERROR] 日志 | 是 |
+| 失败点       | 条件                                          | 客户端收到                                             | 推理资源是否消耗 |
+| ------------ | --------------------------------------------- | ------------------------------------------------------ | ---------------- |
+| ⑥ 路径不匹配 | URL 打错 / 用 GET                             | 404 + -1002，**连接被服务端关闭**（Connection: close） | 否               |
+| ⑥/⑦ 长度检查 | body 缺失、> 256MB、chunked 无 Content-Length | 200 + -1002，**连接被服务端关闭**                      | 否               |
+| ⑧ JSON 解析  | 非 JSON / 非 UTF-8                            | 200 + -1002                                            | 否               |
+| ⑨ 结构校验   | 缺字段、类型错、两种传图方式冲突              | 200 + -1002                                            | 否               |
+| ⑨ 文件名校验 | 空白名、非法字符、扩展名不支持                | 200 + -1003                                            | 否               |
+| ⑩ 装图       | base64 解码失败、共享盘文件不存在、图片解不开 | 200 + -1004                                            | 否               |
+| ⑪ 推理异常   | 引擎内部错误（整体失败，无部分成功）          | 200 + -1001，查服务端 [ERROR] 日志                     | 是               |
 
 ### 1.3 HTTP 报文级交互示例
 
@@ -192,15 +200,15 @@ Connection: close
 
 ### 1.4 请求字段说明
 
-| 字段 | 类型 | 必填 | 约束与说明 |
-|---|---|---|---|
-| `job_id` | string | 是 | 非空；任务唯一标识，服务端**原样回传**用于两端对账；不查重、不幂等，重复提交会重复推理 |
-| `sample_id` | string | 是 | 非空；工件/样本编号 |
-| `pose_id` | string | 建议 | 位姿编号；缺省时响应回传 `""` |
-| `file_names` | string[] | 是 | 非空数组；每个元素仅是文件名（不含路径），需匹配白名单 `^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$`（忽略大小写）；响应中按请求顺序回传 |
-| `images_base64` | string[] | 二选一 | 与 `file_names` **等长且一一对应**；标准 Base64 文本（建议含 padding）；空串按 -1004 处理 |
-| `relative_dir` | string | 二选一 | 相对服务端 `share_root` 的目录，含 `..` 越界 → -1003；与 `images_base64` 互斥，并存 → -1002，均缺 → -1002 |
-| `ext_params` | object | 否 | 业务扩展参数，服务端不解析、不回传 |
+| 字段            | 类型     | 必填   | 约束与说明                                                                                                |
+| --------------- | -------- | ------ | --------------------------------------------------------------------------------------------------------- |
+| `job_id`        | string   | 是     | 非空；任务唯一标识，服务端**原样回传**用于两端对账；不查重、不幂等，重复提交会重复推理                    |
+| `sample_id`     | string   | 是     | 非空；工件/样本编号                                                                                       |
+| `pose_id`       | string   | 建议   | 位姿编号；缺省时响应回传 `""`                                                                             |
+| `file_names`    | string[] | 是     | 非空数组；每个元素仅是文件名（不含路径），需匹配白名单 `^[\w\-. ]+\.(jpg                                  | jpeg | png | bmp | tif | tiff)$`（忽略大小写）；响应中按请求顺序回传 |
+| `images_base64` | string[] | 二选一 | 与 `file_names` **等长且一一对应**；标准 Base64 文本（建议含 padding）；空串按 -1004 处理                 |
+| `relative_dir`  | string   | 二选一 | 相对服务端 `share_root` 的目录，含 `..` 越界 → -1003；与 `images_base64` 互斥，并存 → -1002，均缺 → -1002 |
+| `ext_params`    | object   | 否     | 业务扩展参数，服务端不解析、不回传                                                                        |
 
 两种传图方式的完整报文示例见 [`examples/request_base64.json`](examples/request_base64.json) 与 [`examples/request_share_dir.json`](examples/request_share_dir.json)（示例仅用于对照字段，运行时不读取）。
 
@@ -208,64 +216,64 @@ Connection: close
 
 顶层（错误响应只有前两个键）：
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `error_code` | int | **对接判断的唯一依据**：0 成功，非 0 见错误码表 |
-| `error_msg` | string | 中文文案，仅提示用 |
-| `data` | object | 仅 `error_code == 0` 时存在 |
+| 字段         | 类型   | 说明                                            |
+| ------------ | ------ | ----------------------------------------------- |
+| `error_code` | int    | **对接判断的唯一依据**：0 成功，非 0 见错误码表 |
+| `error_msg`  | string | 中文文案，仅提示用                              |
+| `data`       | object | 仅 `error_code == 0` 时存在                     |
 
 data：
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `job_id` / `sample_id` / `pose_id` | string | 回传请求值（pose_id 未传为 `""`） |
-| `file_names` | string[] | 回传请求值（顺序不变） |
-| `image_width` / `image_height` | int | 第一张图的像素分辨率（多图时其余图见 results 内框坐标范围） |
-| `grayscale` | int | 恒 0（占位） |
-| `results` | object[] | **全部图片的缺陷合并列表**；无缺陷时空数组（正常业务结果） |
-| `alg_raw` | array | 恒空（预留） |
+| 字段                               | 类型     | 说明                                                        |
+| ---------------------------------- | -------- | ----------------------------------------------------------- |
+| `job_id` / `sample_id` / `pose_id` | string   | 回传请求值（pose_id 未传为 `""`）                           |
+| `file_names`                       | string[] | 回传请求值（顺序不变）                                      |
+| `image_width` / `image_height`     | int      | 第一张图的像素分辨率（多图时其余图见 results 内框坐标范围） |
+| `grayscale`                        | int      | 恒 0（占位）                                                |
+| `results`                          | object[] | **全部图片的缺陷合并列表**；无缺陷时空数组（正常业务结果）  |
+| `alg_raw`                          | array    | 恒空（预留）                                                |
 
 results 条目：
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `file_name` | string | **协议扩展字段**：来源图片名（多图归因） |
-| `code` | string | 缺陷类别码（mock：ZM/HS/QJ/WS；yolo：模型类别名） |
-| `score` | float | 置信度 0~1，4 位小数 |
-| `area` | int | 缺陷面积 px²（当前 = 框面积） |
-| `length` | int | 缺陷长度 px（当前 = 框长边） |
-| `volume` | int | 缺陷体积（当前 = area 占位） |
-| `box` | int[4] | `[左顶点X, 左顶点Y, 右顶点X, 右顶点Y]` 像素坐标（即 x1,y1,x2,y2） |
-| `polygon` / `defect_raw` | array | 恒空（预留，分割模型可填） |
+| 字段                     | 类型   | 说明                                                              |
+| ------------------------ | ------ | ----------------------------------------------------------------- |
+| `file_name`              | string | **协议扩展字段**：来源图片名（多图归因）                          |
+| `code`                   | string | 缺陷类别码（mock：ZM/HS/QJ/WS；yolo：模型类别名）                 |
+| `score`                  | float  | 置信度 0~1，4 位小数                                              |
+| `area`                   | int    | 缺陷面积 px²（当前 = 框面积）                                     |
+| `length`                 | int    | 缺陷长度 px（当前 = 框长边）                                      |
+| `volume`                 | int    | 缺陷体积（当前 = area 占位）                                      |
+| `box`                    | int[4] | `[左顶点X, 左顶点Y, 右顶点X, 右顶点Y]` 像素坐标（即 x1,y1,x2,y2） |
+| `polygon` / `defect_raw` | array  | 恒空（预留，分割模型可填）                                        |
 
 成功与失败响应的完整示例见 [`examples/response_success.json`](examples/response_success.json) 与 [`examples/response_failure.json`](examples/response_failure.json)。
 
 ### 1.6 交互规则清单
 
-| 规则 | 细节 |
-|---|---|
-| 编码 | 请求与响应 body 均为 UTF-8；服务端 `ensure_ascii=False` 不转义中文，错误文案是中文；勿按字符数假设 body 长度（中文占多字节），以 `Content-Length` 为准 |
-| 连接复用 | 服务端 HTTP/1.1 keep-alive：正常请求响应后连接保持，RestSharp/HttpClient 连接池可复用；仅 404 与 body 超限两个分支主动发 `Connection: close` 并断开（原因：这两分支未消费请求体，复用会污染下一请求） |
-| 并发与排队 | 每连接一个线程，多连接可同时到达；但推理由 `g_inferLock` 串行 → 响应耗时 ≈ 前面积压请求的推理时间之和 + 本次推理时间；客户端超时必须覆盖排队时间 |
-| 超时分工 | 客户端 timeout（C# `inspectTimeout`）覆盖"发送+排队+推理+响应"全程；服务端 socket 300s 超时用于踢掉挂死连接；两边应满足：客户端 timeout > 服务端最坏处理耗时 |
-| 请求体上限 | 256MB（`kMaxBodyBytes`）；base64 体积膨胀约 4/3，即原始图约 ≤ 190MB；超限直接拒为 -1002 不读 body |
-| 多图语义 | 逐张装图、逐张推理，结果按请求顺序合并进 `results`；**任一张失败则整个请求失败**，无部分成功 |
-| 共享盘时序前置 | 必须先把图片**写完盘**（文件句柄已关闭）再发 POST；服务端收到请求即刻读取，不等待、不轮询、不重试；写盘与发请求之间无确认机制，由文件系统保证 |
-| 时间口径 | 响应头 `X-Process-Ms` = 服务端处理耗时（校验+装图+推理，不含网络）；客户端 elapsed = 端到端（含建连与传输）；对账时以 X-Process-Ms 排除网络因素 |
-| 实测量级参考 | mock：全流程 2~20ms；yolo26n CPU：首次含模型加载约 3.1s（warmup），此后单图约百毫秒级 |
+| 规则           | 细节                                                                                                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 编码           | 请求与响应 body 均为 UTF-8；服务端 `ensure_ascii=False` 不转义中文，错误文案是中文；勿按字符数假设 body 长度（中文占多字节），以 `Content-Length` 为准                                                |
+| 连接复用       | 服务端 HTTP/1.1 keep-alive：正常请求响应后连接保持，RestSharp/HttpClient 连接池可复用；仅 404 与 body 超限两个分支主动发 `Connection: close` 并断开（原因：这两分支未消费请求体，复用会污染下一请求） |
+| 并发与排队     | 每连接一个线程，多连接可同时到达；但推理由 `g_inferLock` 串行 → 响应耗时 ≈ 前面积压请求的推理时间之和 + 本次推理时间；客户端超时必须覆盖排队时间                                                      |
+| 超时分工       | 客户端 timeout（C# `inspectTimeout`）覆盖"发送+排队+推理+响应"全程；服务端 socket 300s 超时用于踢掉挂死连接；两边应满足：客户端 timeout > 服务端最坏处理耗时                                          |
+| 请求体上限     | 256MB（`kMaxBodyBytes`）；base64 体积膨胀约 4/3，即原始图约 ≤ 190MB；超限直接拒为 -1002 不读 body                                                                                                     |
+| 多图语义       | 逐张装图、逐张推理，结果按请求顺序合并进 `results`；**任一张失败则整个请求失败**，无部分成功                                                                                                          |
+| 共享盘时序前置 | 必须先把图片**写完盘**（文件句柄已关闭）再发 POST；服务端收到请求即刻读取，不等待、不轮询、不重试；写盘与发请求之间无确认机制，由文件系统保证                                                         |
+| 时间口径       | 响应头 `X-Process-Ms` = 服务端处理耗时（校验+装图+推理，不含网络）；客户端 elapsed = 端到端（含建连与传输）；对账时以 X-Process-Ms 排除网络因素                                                       |
+| 实测量级参考   | mock：全流程 2~20ms；yolo26n CPU：首次含模型加载约 3.1s（warmup），此后单图约百毫秒级                                                                                                                 |
 
 ### 1.7 异常场景交互表现
 
-| 场景 | 服务端行为 | 客户端观测 | 处理 |
-|---|---|---|---|
-| 服务未启动 / 地址端口错 | 不存在 | `URLError: connection failed`（client.py），HTTP 状态显示 N/A；C# 侧 `HttpRequestException` / `WebException` | 启动服务、核对地址与防火墙 |
-| 客户端超时早于响应 | 推理照常完成，响应发往已断开的连接后被丢弃 | socket timeout / `TaskCanceledException` | 调大 timeout，或用 `X-Process-Ms` 与服务端日志比对定位耗时 |
-| 请求路径错 | 404 + -1002，连接关闭 | HTTPError / `HttpStatusCode.NotFound`，**body 仍是 JSON 可解析** | 核对 URL 与 `config.json` 的 `endpoint` |
-| 请求体超限 / chunked | 不读 body，直接 200 + -1002，连接关闭 | `error_code=-1002`（invalid content length） | 压缩图片或调 `kMaxBodyBytes` |
-| JSON / UTF-8 非法 | 200 + -1002 | `error_code=-1002` | 检查序列化（勿手动拼 JSON 字符串） |
-| 图片数据问题 | 200 + -1004 | `error_code=-1004` | base64：核对编码与完整性；共享盘：核对服务端 `share_root` 与落盘完成状态 |
-| 推理异常 | 200 + -1001，日志 [ERROR] | `error_code=-1001` | 看服务端日志定位（模型缺失、显存不足等） |
-| 服务端被 Ctrl+C | 监听关闭，在途请求响应丢失 | connection failed / 中断 | 客户端重试；产线建议由进程管理器守护 |
+| 场景                    | 服务端行为                                 | 客户端观测                                                                                                   | 处理                                                                     |
+| ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| 服务未启动 / 地址端口错 | 不存在                                     | `URLError: connection failed`（client.py），HTTP 状态显示 N/A；C# 侧 `HttpRequestException` / `WebException` | 启动服务、核对地址与防火墙                                               |
+| 客户端超时早于响应      | 推理照常完成，响应发往已断开的连接后被丢弃 | socket timeout / `TaskCanceledException`                                                                     | 调大 timeout，或用 `X-Process-Ms` 与服务端日志比对定位耗时               |
+| 请求路径错              | 404 + -1002，连接关闭                      | HTTPError / `HttpStatusCode.NotFound`，**body 仍是 JSON 可解析**                                             | 核对 URL 与 `config.json` 的 `endpoint`                                  |
+| 请求体超限 / chunked    | 不读 body，直接 200 + -1002，连接关闭      | `error_code=-1002`（invalid content length）                                                                 | 压缩图片或调 `kMaxBodyBytes`                                             |
+| JSON / UTF-8 非法       | 200 + -1002                                | `error_code=-1002`                                                                                           | 检查序列化（勿手动拼 JSON 字符串）                                       |
+| 图片数据问题            | 200 + -1004                                | `error_code=-1004`                                                                                           | base64：核对编码与完整性；共享盘：核对服务端 `share_root` 与落盘完成状态 |
+| 推理异常                | 200 + -1001，日志 [ERROR]                  | `error_code=-1001`                                                                                           | 看服务端日志定位（模型缺失、显存不足等）                                 |
+| 服务端被 Ctrl+C         | 监听关闭，在途请求响应丢失                 | connection failed / 中断                                                                                     | 客户端重试；产线建议由进程管理器守护                                     |
 
 ---
 
@@ -317,15 +325,15 @@ shimada-predict_service/
 
 ### 4.1 常量与工具
 
-| 名称 | 说明 |
-|---|---|
-| `kOk / kSystemError / kInvalidParam / kInvalidImageName / kImageNotFound` | 协议错误码常量（k 前缀） |
-| `kErrorMsg` | 错误码 → 错误文案映射，与协议表一致 |
-| `kMaxBodyBytes` = 256 MB | 请求体上限，防止恶意超大包 |
-| `kImageNamePattern` | 文件名白名单正则：`^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$`（忽略大小写）。字符集内不含 `/`、`\`，天然阻断文件名携带路径 |
-| `kHandlerTimeoutSec` = 300 | Handler 的 socket 超时，防慢客户端占死线程 |
-| `makeError(code, msg=None)` | 构造 `{"error_code":..., "error_msg":...}`；msg 缺省时查 `kErrorMsg` |
-| `readImageInfo(bytes)` | 用 PIL 从内存图片读取 `(width, height)`；PIL 缺失、解码失败均返回 `None`（后续映射为 -1004） |
+| 名称                                                                      | 说明                                                                                         |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `kOk / kSystemError / kInvalidParam / kInvalidImageName / kImageNotFound` | 协议错误码常量（k 前缀）                                                                     |
+| `kErrorMsg`                                                               | 错误码 → 错误文案映射，与协议表一致                                                          |
+| `kMaxBodyBytes` = 256 MB                                                  | 请求体上限，防止恶意超大包                                                                   |
+| `kImageNamePattern`                                                       | 文件名白名单正则：`^[\w\-. ]+\.(jpg                                                          | jpeg | png | bmp | tif | tiff)$`（忽略大小写）。字符集内不含 `/`、`\`，天然阻断文件名携带路径 |
+| `kHandlerTimeoutSec` = 300                                                | Handler 的 socket 超时，防慢客户端占死线程                                                   |
+| `makeError(code, msg=None)`                                               | 构造 `{"error_code":..., "error_msg":...}`；msg 缺省时查 `kErrorMsg`                         |
+| `readImageInfo(bytes)`                                                    | 用 PIL 从内存图片读取 `(width, height)`；PIL 缺失、解码失败均返回 `None`（后续映射为 -1004） |
 
 ### 4.2 推理引擎
 
@@ -343,15 +351,15 @@ shimada-predict_service/
 - `predict` 中 `cv2.imdecode(np.frombuffer(bytes), IMREAD_COLOR)` 将请求体图片字节解码为 BGR ndarray，交给 `model.predict(img, device, conf, verbose=False)`。
 - 字段映射：
 
-| 协议字段 | 来源 |
-|---|---|
-| `code` | `result.names[cls_id]`（类别名；无名字时回退为类别 id 字符串） |
-| `score` | `boxes.conf[i]`，round 4 位小数 |
-| `box` | `boxes.xyxy[i]` 取整 → `[x1, y1, x2, y2]`，与协议"左顶点/右顶点"定义一致 |
-| `area` | `(x2-x1) * (y2-y1)`（框面积；业务如需真实缺陷面积在此替换） |
-| `length` | `max(框宽, 框高)` |
-| `volume` | 与 area 相同的占位值 |
-| `polygon / defect_raw` | 空数组（YOLO 检测头无多边形输出） |
+| 协议字段               | 来源                                                                     |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `code`                 | `result.names[cls_id]`（类别名；无名字时回退为类别 id 字符串）           |
+| `score`                | `boxes.conf[i]`，round 4 位小数                                          |
+| `box`                  | `boxes.xyxy[i]` 取整 → `[x1, y1, x2, y2]`，与协议"左顶点/右顶点"定义一致 |
+| `area`                 | `(x2-x1) * (y2-y1)`（框面积；业务如需真实缺陷面积在此替换）              |
+| `length`               | `max(框宽, 框高)`                                                        |
+| `volume`               | 与 area 相同的占位值                                                     |
+| `polygon / defect_raw` | 空数组（YOLO 检测头无多边形输出）                                        |
 
 - 无检出（`boxes` 为空）时返回空列表 → 响应 `results: []`，`error_code` 仍为 0（"没有缺陷"是正常业务结果，不是错误）。
 
@@ -374,15 +382,15 @@ do_POST
 
 `validateRequest` 校验规则（按序短路）：
 
-| 步骤 | 条件 | 错误码 |
-|---|---|---|
-| 1 | 请求体不是 JSON 对象 | -1002 |
-| 2 | `job_id` / `sample_id` 缺失、非字符串或空白 | -1002 |
-| 3 | `file_names` 非列表或为空列表；元素非字符串 | -1002 |
-| 4 | 文件名空白或不过 `kImageNamePattern` 白名单 | -1003 |
-| 5 | `images_base64` 与 `relative_dir` 同时存在 / 都不存在 | -1002 |
-| 6 | base64 模式：`images_base64` 非列表、长度 ≠ `file_names`、元素非字符串或空串（空串视为数据不存在） | -1002 / -1004 |
-| 7 | 共享盘模式：`relative_dir` 缺失、非字符串或空白 | -1002 |
+| 步骤 | 条件                                                                                               | 错误码        |
+| ---- | -------------------------------------------------------------------------------------------------- | ------------- |
+| 1    | 请求体不是 JSON 对象                                                                               | -1002         |
+| 2    | `job_id` / `sample_id` 缺失、非字符串或空白                                                        | -1002         |
+| 3    | `file_names` 非列表或为空列表；元素非字符串                                                        | -1002         |
+| 4    | 文件名空白或不过 `kImageNamePattern` 白名单                                                        | -1003         |
+| 5    | `images_base64` 与 `relative_dir` 同时存在 / 都不存在                                              | -1002         |
+| 6    | base64 模式：`images_base64` 非列表、长度 ≠ `file_names`、元素非字符串或空串（空串视为数据不存在） | -1002 / -1004 |
+| 7    | 共享盘模式：`relative_dir` 缺失、非字符串或空白                                                    | -1002         |
 
 `loadImages` 装图规则：
 
@@ -439,30 +447,30 @@ PIL 在深灰底上撒 150 个随机灰度小方块（噪声纹理）+ 一个红
 
 ### 5.5 四个子命令
 
-| 子命令 | 逻辑 |
-|---|---|
-| `gen-images` | `makeTestImage` × count 张，按协议命名风格 `{sampleId}_C01_{poseId}_L{i}_{时间戳}.jpg` 写入 `--out` 目录并打印绝对路径 |
-| `send-base64` | 有 `--images` 读文件；无则内存生成一张 1920×1440 测试图（开箱即测）。构造 payload → `postJson` → `printResult` |
-| `send-path` | 用 `--dir` + `--files` 构造共享盘 payload → `postJson` → `printResult`。要求文件已存在于服务端 `share_root` 下（先 gen-images 到共享目录，见 USAGE §5） |
-| `test-errors` | 13 个用例自动跑（见下表），每例打印 `[PASS]/[FAIL] expected=... actual=...`，汇总后以进程退出码 0/1 表示全部通过与否 |
+| 子命令        | 逻辑                                                                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gen-images`  | `makeTestImage` × count 张，按协议命名风格 `{sampleId}_C01_{poseId}_L{i}_{时间戳}.jpg` 写入 `--out` 目录并打印绝对路径                                  |
+| `send-base64` | 有 `--images` 读文件；无则内存生成一张 1920×1440 测试图（开箱即测）。构造 payload → `postJson` → `printResult`                                          |
+| `send-path`   | 用 `--dir` + `--files` 构造共享盘 payload → `postJson` → `printResult`。要求文件已存在于服务端 `share_root` 下（先 gen-images 到共享目录，见 USAGE §5） |
+| `test-errors` | 13 个用例自动跑（见下表），每例打印 `[PASS]/[FAIL] expected=... actual=...`，汇总后以进程退出码 0/1 表示全部通过与否                                    |
 
 `test-errors` 用例表：
 
-| # | 用例 | 构造方式 | 期望 error_code |
-|---|---|---|---|
-| 1 | valid base64 request | 完整合法请求 | 0 |
-| 2 | missing job_id | 删 `job_id` | -1002 |
-| 3 | missing sample_id | 删 `sample_id` | -1002 |
-| 4 | file_names/images_base64 length mismatch | 两名一图 | -1002 |
-| 5 | empty file_names | 空数组 | -1002 |
-| 6 | both images_base64 and relative_dir | 两种方式并存 | -1002 |
-| 7 | neither images_base64 nor relative_dir | 都不带 | -1002 |
-| 8 | empty file name | `" "`（空白名） | -1003 |
-| 9 | illegal file name | `"a|b<img>.jpg"` | -1003 |
-| 10 | unsupported file extension | `"ghost.exe"` | -1003 |
-| 11 | corrupted base64 image | `"@@not-base64@@"` | -1004 |
-| 12 | empty base64 image | `""` | -1004 |
-| 13 | image not found on share | `relative_dir="no_such_dir/"` + `"ghost.jpg"`（无论服务端共享根指向哪，路径必不存在） | -1004 |
+| #   | 用例                                     | 构造方式                                                                              | 期望 error_code |
+| --- | ---------------------------------------- | ------------------------------------------------------------------------------------- | --------------- |
+| 1   | valid base64 request                     | 完整合法请求                                                                          | 0               |
+| 2   | missing job_id                           | 删 `job_id`                                                                           | -1002           |
+| 3   | missing sample_id                        | 删 `sample_id`                                                                        | -1002           |
+| 4   | file_names/images_base64 length mismatch | 两名一图                                                                              | -1002           |
+| 5   | empty file_names                         | 空数组                                                                                | -1002           |
+| 6   | both images_base64 and relative_dir      | 两种方式并存                                                                          | -1002           |
+| 7   | neither images_base64 nor relative_dir   | 都不带                                                                                | -1002           |
+| 8   | empty file name                          | `" "`（空白名）                                                                       | -1003           |
+| 9   | illegal file name                        | `"a                                                                                   | b<img>.jpg"`    | -1003 |
+| 10  | unsupported file extension               | `"ghost.exe"`                                                                         | -1003           |
+| 11  | corrupted base64 image                   | `"@@not-base64@@"`                                                                    | -1004           |
+| 12  | empty base64 image                       | `""`                                                                                  | -1004           |
+| 13  | image not found on share                 | `relative_dir="no_such_dir/"` + `"ghost.jpg"`（无论服务端共享根指向哪，路径必不存在） | -1004           |
 
 ### 5.6 输出 `printResult`
 
@@ -472,11 +480,11 @@ PIL 在深灰底上撒 150 个随机灰度小方块（噪声纹理）+ 一个红
 
 ## 6. 扩展与对接真实业务
 
-| 需求 | 改动点 |
-|---|---|
-| 真实缺陷面积/体积 | `YoloEngine.predict` 中 area/length/volume 当前是框的占位值；接入分割模型（mask 像素数）或业务测量逻辑替换 |
-| 多边形输出 | 协议 `polygon` 字段；在引擎里把分割 mask 轮廓坐标填入即可，服务端其余逻辑不动 |
-| mock 类别 | `MockEngine.kDefectCodes` |
-| 并发推理 | 当前 `g_inferLock` 全局串行；多卡部署可为每卡建独立引擎+锁，或换推理批处理队列 |
-| 接口路径/端口 | 全部在 `config.json` 中配置，无需改代码 |
-| HTTPS / 鉴权 | 协议声明"HTTP 头部无特殊校验逻辑"，如需在标准库 `ThreadingHTTPServer` 外再套 Nginx 反代加 TLS 即可，服务端不用改 |
+| 需求              | 改动点                                                                                                           |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| 真实缺陷面积/体积 | `YoloEngine.predict` 中 area/length/volume 当前是框的占位值；接入分割模型（mask 像素数）或业务测量逻辑替换       |
+| 多边形输出        | 协议 `polygon` 字段；在引擎里把分割 mask 轮廓坐标填入即可，服务端其余逻辑不动                                    |
+| mock 类别         | `MockEngine.kDefectCodes`                                                                                        |
+| 并发推理          | 当前 `g_inferLock` 全局串行；多卡部署可为每卡建独立引擎+锁，或换推理批处理队列                                   |
+| 接口路径/端口     | 全部在 `config.json` 中配置，无需改代码                                                                          |
+| HTTPS / 鉴权      | 协议声明"HTTP 头部无特殊校验逻辑"，如需在标准库 `ThreadingHTTPServer` 外再套 Nginx 反代加 TLS 即可，服务端不用改 |

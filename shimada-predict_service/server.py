@@ -76,22 +76,25 @@ class MockEngine:
             x1 = rng.randint(0, max(0, imageWidth - boxWidth))
             y1 = rng.randint(0, max(0, imageHeight - boxHeight))
             area = boxWidth * boxHeight
-            defects.append({
-                "code": rng.choice(self.kDefectCodes),
-                "score": round(rng.uniform(0.3, 0.99), 4),
-                "area": area,
-                "length": max(boxWidth, boxHeight),
-                "volume": area,
-                "box": [x1, y1, x1 + boxWidth, y1 + boxHeight],
-                "polygon": [],
-                "defect_raw": [],
-            })
+            defects.append(
+                {
+                    "code": rng.choice(self.kDefectCodes),
+                    "score": round(rng.uniform(0.3, 0.99), 4),
+                    "area": area,
+                    "length": max(boxWidth, boxHeight),
+                    "volume": area,
+                    "box": [x1, y1, x1 + boxWidth, y1 + boxHeight],
+                    "polygon": [],
+                    "defect_raw": [],
+                }
+            )
         return defects
 
 
 class YoloEngine:
     def __init__(self, modelPath, device, conf):
         from ultralytics import YOLO
+
         self.model = YOLO(modelPath)
         self.device = device
         self.conf = conf
@@ -99,6 +102,7 @@ class YoloEngine:
     def predict(self, imageBytes, fileName, imageWidth, imageHeight):
         import cv2
         import numpy as np
+
         img = cv2.imdecode(np.frombuffer(imageBytes, dtype=np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return []
@@ -110,16 +114,18 @@ class YoloEngine:
             boxWidth = max(0, x2 - x1)
             boxHeight = max(0, y2 - y1)
             clsId = int(boxes.cls[i])
-            defects.append({
-                "code": result.names.get(clsId, str(clsId)),
-                "score": round(float(boxes.conf[i]), 4),
-                "area": boxWidth * boxHeight,
-                "length": max(boxWidth, boxHeight),
-                "volume": boxWidth * boxHeight,
-                "box": [x1, y1, x2, y2],
-                "polygon": [],
-                "defect_raw": [],
-            })
+            defects.append(
+                {
+                    "code": result.names.get(clsId, str(clsId)),
+                    "score": round(float(boxes.conf[i]), 4),
+                    "area": boxWidth * boxHeight,
+                    "length": max(boxWidth, boxHeight),
+                    "volume": boxWidth * boxHeight,
+                    "box": [x1, y1, x2, y2],
+                    "polygon": [],
+                    "defect_raw": [],
+                }
+            )
         return defects
 
 
@@ -250,13 +256,18 @@ class DefectHandler(BaseHTTPRequestHandler):
     def handleInfer(self):
         pathOnly = self.path.split("?")[0].rstrip("/")
         if pathOnly != g_config.endpoint.rstrip("/"):
-            self.sendJson(makeError(kInvalidParam, f"unknown endpoint: {self.path}"),
-                          httpStatus=404, extraHeaders={"Connection": "close"})
+            self.sendJson(
+                makeError(kInvalidParam, f"unknown endpoint: {self.path}"),
+                httpStatus=404,
+                extraHeaders={"Connection": "close"},
+            )
             return
         contentLength = int(self.headers.get("Content-Length") or 0)
         if contentLength <= 0 or contentLength > kMaxBodyBytes:
-            self.sendJson(makeError(kInvalidParam, f"invalid content length: {contentLength}"),
-                          extraHeaders={"Connection": "close"})
+            self.sendJson(
+                makeError(kInvalidParam, f"invalid content length: {contentLength}"),
+                extraHeaders={"Connection": "close"},
+            )
             return
         rawBody = self.rfile.read(contentLength)
         try:

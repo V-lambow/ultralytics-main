@@ -1,17 +1,14 @@
 {
-    "job_id": "J20261119103015234",
-    "sample_id": "S00001",
-    "pose_id": "P01",
-    "file_names": [
-        "S00001_C01_P01_L0_20261119103015.jpg",
-        "S00001_C01_P01_L1_20261119103015.jpg"
-    ],
-    "images_base64": [
-        "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRof...",
-        "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJC..."
-    ],
-    "ext_params": {
-        "client": "shimada-test-client",
-        "sent_at": "2026-11-19 10:30:15"
-    }
+  "job_id": "J20261119103015234",
+  "sample_id": "S00001",
+  "pose_id": "P01",
+  "file_names": ["S00001_C01_P01_L0_20261119103015.jpg", "S00001_C01_P01_L1_20261119103015.jpg"],
+  "images_base64": [
+    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRof...",
+    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJC..."
+  ],
+  "ext_params": {
+    "client": "shimada-test-client",
+    "sent_at": "2026-11-19 10:30:15"
+  }
 }

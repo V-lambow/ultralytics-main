@@ -1,31 +1,34 @@
 import importlib.metadata
+
 _orig_read_text = importlib.metadata.PathDistribution.read_text
+
+
 def _safe_read_text(self, name):
     try:
         return _orig_read_text(self, name)
     except UnicodeDecodeError:
         return None
+
+
 importlib.metadata.PathDistribution.read_text = _safe_read_text
 
-import tornado.ioloop
-import tornado.web
-import cv2
-import numpy as np
 import json
 import os
 import threading
-from pathlib import Path
-from loguru import logger
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+
+import cv2
+import numpy as np
+import tornado.ioloop
+import tornado.web
+from loguru import logger
+
 from ultralytics import YOLO
 
 
 def create_polygon_mask(img_shape, points):
-    """
-    根据多边形顶点创建mask
-    points: list of [x, y] 坐标
-    返回: 单通道mask，多边形内为255，其余为0
+    """根据多边形顶点创建mask points: list of [x, y] 坐标 返回: 单通道mask，多边形内为255，其余为0.
     """
     mask = np.zeros(img_shape[:2], dtype=np.uint8)
     pts = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
@@ -34,23 +37,19 @@ def create_polygon_mask(img_shape, points):
 
 
 def apply_region_mask(img, a_config):
+    """根据配置中的inner/outer对图像做mask处理 - inner: 只保留inner多边形区域，其余置0 - outer: 将outer多边形区域置0，保留其余部分 - 无inner/outer: 返回原图.
     """
-    根据配置中的inner/outer对图像做mask处理
-    - inner: 只保留inner多边形区域，其余置0
-    - outer: 将outer多边形区域置0，保留其余部分
-    - 无inner/outer: 返回原图
-    """
-    inner_cfg = a_config.get('inner')
-    outer_cfg = a_config.get('outer')
+    inner_cfg = a_config.get("inner")
+    outer_cfg = a_config.get("outer")
 
     if inner_cfg:
-        points = inner_cfg.get('points', [])
+        points = inner_cfg.get("points", [])
         if points:
             mask = create_polygon_mask(img.shape, points)
             return cv2.bitwise_and(img, img, mask=mask)
 
     if outer_cfg:
-        points = outer_cfg.get('points', [])
+        points = outer_cfg.get("points", [])
         if points:
             mask = create_polygon_mask(img.shape, points)
             mask_inv = cv2.bitwise_not(mask)
@@ -60,7 +59,7 @@ def apply_region_mask(img, a_config):
 
 
 def compute_iou(box_a, box_b):
-    """计算两个框的IoU，box格式为[x1, y1, x2, y2]"""
+    """计算两个框的IoU，box格式为[x1, y1, x2, y2]."""
     x1 = max(box_a[0], box_b[0])
     y1 = max(box_a[1], box_b[1])
     x2 = min(box_a[2], box_b[2])
@@ -73,49 +72,47 @@ def compute_iou(box_a, box_b):
 
 
 def nms_merge(detections, iou_thresh=0.5):
-    """
-    对检测结果进行NMS合并，处理重叠区域的重复检测
-    detections: list of dict，每个dict包含 box, confidence, code 等字段
-    iou_thresh: IoU阈值，超过此值的框会被合并
-    返回合并后的检测结果列表
+    """对检测结果进行NMS合并，处理重叠区域的重复检测 detections: list of dict，每个dict包含 box, confidence, code 等字段 iou_thresh: IoU阈值，超过此值的框会被合并
+    返回合并后的检测结果列表.
     """
     if not detections:
         return []
 
     # 按置信度降序排序
-    detections = sorted(detections, key=lambda x: x.get('confidence', 0), reverse=True)
+    detections = sorted(detections, key=lambda x: x.get("confidence", 0), reverse=True)
 
     keep = []
     while detections:
         current = detections.pop(0)
-        merged_box = current['box'][:]
+        merged_box = current["box"][:]
 
         remaining = []
         for det in detections:
-            if det.get('code') != current.get('code'):
+            if det.get("code") != current.get("code"):
                 remaining.append(det)
                 continue
 
-            iou = compute_iou(merged_box, det['box'])
+            iou = compute_iou(merged_box, det["box"])
             if iou >= iou_thresh:
                 # 合并两个框：取并集
-                merged_box[0] = min(merged_box[0], det['box'][0])
-                merged_box[1] = min(merged_box[1], det['box'][1])
-                merged_box[2] = max(merged_box[2], det['box'][2])
-                merged_box[3] = max(merged_box[3], det['box'][3])
+                merged_box[0] = min(merged_box[0], det["box"][0])
+                merged_box[1] = min(merged_box[1], det["box"][1])
+                merged_box[2] = max(merged_box[2], det["box"][2])
+                merged_box[3] = max(merged_box[3], det["box"][3])
                 # 保留置信度更高的
-                if det.get('confidence', 0) > current.get('confidence', 0):
-                    current['confidence'] = det['confidence']
+                if det.get("confidence", 0) > current.get("confidence", 0):
+                    current["confidence"] = det["confidence"]
             else:
                 remaining.append(det)
 
-        current['box'] = merged_box
-        current['area'] = (merged_box[2] - merged_box[0]) * (merged_box[3] - merged_box[1])
-        current['length'] = max(merged_box[2] - merged_box[0], merged_box[3] - merged_box[1])
+        current["box"] = merged_box
+        current["area"] = (merged_box[2] - merged_box[0]) * (merged_box[3] - merged_box[1])
+        current["length"] = max(merged_box[2] - merged_box[0], merged_box[3] - merged_box[1])
         keep.append(current)
         detections = remaining
 
     return keep
+
 
 # 配置日志
 log_dir = "log"
@@ -127,7 +124,7 @@ logger.add(
     rotation="00:00",  # 每天00:00创建新文件
     retention="7 days",  # 保留7天
     compression="zip",  # 压缩旧日志
-    level="INFO"
+    level="INFO",
 )
 
 # # 配置控制台输出
@@ -159,122 +156,107 @@ class ImageDefectHandler(tornado.web.RequestHandler):
         logger.info(f"Loaded model: {model_path}")
 
     def load_config(self):
-        """
-        加载detect_item.json配置文件
-        """
+        """加载detect_item.json配置文件."""
         if os.path.exists(self.config_path):
-            with open(self.config_path, 'r', encoding='utf-8') as f:
+            with open(self.config_path, encoding="utf-8") as f:
                 return json.load(f)
         return {}
-
-
 
     async def post(self):
         try:
             data = json.loads(self.request.body)
-            
-            job_id = data.get('job_id', '')
-            sample_id = data.get('sample_id', '')
-            pose_id = data.get('pose_id', '')
-            file_names = data.get('file_names', [])
-            relative_dir = data.get('relative_dir', '')
-            
-            logger.info(f"Received request: job_id={job_id}, sample_id={sample_id}, pose_id={pose_id}, "
-                       f"file_names={file_names}")
-            
+
+            job_id = data.get("job_id", "")
+            sample_id = data.get("sample_id", "")
+            pose_id = data.get("pose_id", "")
+            file_names = data.get("file_names", [])
+            relative_dir = data.get("relative_dir", "")
+
+            logger.info(
+                f"Received request: job_id={job_id}, sample_id={sample_id}, pose_id={pose_id}, file_names={file_names}"
+            )
+
             if not file_names:
                 raise ValueError("file_names is required")
-            
+
             image_path = os.path.join(relative_dir, file_names[0])
-            
+
             # 从配置文件读取滑窗参数
-            use_slide_window = self.detect_config.get('use_slide_window', False)
-            slide_rows = int(self.detect_config.get('slide_rows', 0))
-            slide_cols = int(self.detect_config.get('slide_cols', 0))
-            overlap_pixels = int(self.detect_config.get('overlap_pixels', 0))
-            border_expand = int(self.detect_config.get('border_expand', 0))
-            self.imgsz = int(self.detect_config.get('imgsz', 640))
-            self.device = self.detect_config.get('device', 'cpu')
-            
+            use_slide_window = self.detect_config.get("use_slide_window", False)
+            slide_rows = int(self.detect_config.get("slide_rows", 0))
+            slide_cols = int(self.detect_config.get("slide_cols", 0))
+            overlap_pixels = int(self.detect_config.get("overlap_pixels", 0))
+            border_expand = int(self.detect_config.get("border_expand", 0))
+            self.imgsz = int(self.detect_config.get("imgsz", 640))
+            self.device = self.detect_config.get("device", "cpu")
+
             if use_slide_window:
-                logger.info(f"Using slide window mode: {slide_rows}x{slide_cols}, "
-                           f"overlap={overlap_pixels}px, border_expand={border_expand}px")
+                logger.info(
+                    f"Using slide window mode: {slide_rows}x{slide_cols}, "
+                    f"overlap={overlap_pixels}px, border_expand={border_expand}px"
+                )
                 results = await self.process_image_slide_window(
-                    image_path, pose_id, sample_id,
-                    slide_rows, slide_cols, overlap_pixels, border_expand
+                    image_path, pose_id, sample_id, slide_rows, slide_cols, overlap_pixels, border_expand
                 )
             else:
                 logger.info("Using direct crop mode (slide_window disabled)")
                 results = await self.process_image_slide_window(
-                    image_path, pose_id, sample_id,
-                    slide_rows, slide_cols, overlap_pixels, border_expand
+                    image_path, pose_id, sample_id, slide_rows, slide_cols, overlap_pixels, border_expand
                 )
-            
+
             # 如果有检测结果，异步绘制并保存，不阻塞主事件循环
             if results:
                 await tornado.ioloop.IOLoop.current().run_in_executor(
-                    self.executor, 
-                    self.draw_defects, 
-                    image_path, 
-                    results, 
-                    sample_id
+                    self.executor, self.draw_defects, image_path, results, sample_id
                 )
-            
+
             response = {
                 "product_type": "",
                 "job_id": job_id,
                 "pose_id": pose_id,
                 "results": results,
-                "file_names": file_names
+                "file_names": file_names,
             }
-            
+
             logger.info(f"Processing completed, found {len(results)} defects")
-            
+
             # 更改响应格式为 {"error_code": 0, "error_msg": 'OK','data':response}
-            self.write({
-                "error_code": 0,
-                "error_msg": "OK",
-                "data": response
-            })
-            
+            self.write({"error_code": 0, "error_msg": "OK", "data": response})
+
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
+            logger.error(f"Error processing request: {e!s}")
             self.set_status(500)
             # 错误时返回 {"error_code": 999, "error_msg": 'False'}
-            self.write({
-                "error_code": 999,
-                "error_msg": "False"
-            })
+            self.write({"error_code": 999, "error_msg": "False"})
 
     def run_yolo_inference(self, img, imgsz=640):
-        """
-        执行YOLO模型推理，确保线程安全
-        """
+        """执行YOLO模型推理，确保线程安全."""
         try:
             with self.model_lock:
                 # 执行推理
-                results = self.model(img, 
-                                    conf=0.25,  # 置信度阈值
-                                    iou=0.45,   # IOU阈值
-                                    imgsz=imgsz,  # 推理图像尺寸
-                                    device=self.device,
-                                    verbose=False)
+                results = self.model(
+                    img,
+                    conf=0.25,  # 置信度阈值
+                    iou=0.45,  # IOU阈值
+                    imgsz=imgsz,  # 推理图像尺寸
+                    device=self.device,
+                    verbose=False,
+                )
                 return results
         except Exception as e:
-            logger.error(f"YOLO inference error: {str(e)}")
+            logger.error(f"YOLO inference error: {e!s}")
             raise
 
     def calculate_slide_positions(self, img_height, img_width, slide_rows, slide_cols, overlap_pixels):
-        """
-        计算滑窗在原图上的位置坐标
-        
+        """计算滑窗在原图上的位置坐标.
+
         Args:
             img_height: 图片高度
             img_width: 图片宽度
             slide_rows: 滑窗行数
             slide_cols: 滑窗列数
             overlap_pixels: 相邻窗口的交叠像素数
-        
+
         Returns:
             list of dict，每个dict包含:
                 - row: 行索引
@@ -302,18 +284,13 @@ class ImageDefectHandler(tornado.web.RequestHandler):
                 y2 = min(img_height, y2)
                 x2 = min(img_width, x2)
 
-                positions.append({
-                    'row': r,
-                    'col': c,
-                    'roi': (y1, x1, y2, x2)
-                })
+                positions.append({"row": r, "col": c, "roi": (y1, x1, y2, x2)})
 
         return positions
 
     def extract_window(self, img, roi, border_expand):
-        """
-        从原图提取窗口，支持边框外扩/内陷
-        
+        """从原图提取窗口，支持边框外扩/内陷.
+
         Args:
             img: 原图 (numpy array)
             roi: (y1, x1, y2, x2) 窗口在原图上的坐标
@@ -321,11 +298,10 @@ class ImageDefectHandler(tornado.web.RequestHandler):
                           - 正数: 向外扩展，扩展区域填充灰度0（黑色）
                           - 负数: 向内收缩，只取窗口内部区域
                           - 0: 不做调整
-        
+
         Returns:
             window: 提取的窗口图像 (numpy array)
-            offset: (offset_y, offset_x) 窗口左上角在原图上的偏移量
-                    用于后续将检测坐标映射回原图
+            offset: (offset_y, offset_x) 窗口左上角在原图上的偏移量 用于后续将检测坐标映射回原图
         """
         y1, x1, y2, x2 = roi
         img_h, img_w = img.shape[:2]
@@ -363,7 +339,7 @@ class ImageDefectHandler(tornado.web.RequestHandler):
         src_w = valid_x2 - valid_x1
 
         if src_h > 0 and src_w > 0:
-            window[dst_y:dst_y + src_h, dst_x:dst_x + src_w] = img[valid_y1:valid_y2, valid_x1:valid_x2]
+            window[dst_y : dst_y + src_h, dst_x : dst_x + src_w] = img[valid_y1:valid_y2, valid_x1:valid_x2]
 
         # 窗口左上角在原图上的偏移量（用于坐标映射）
         offset_y = ext_y1
@@ -372,29 +348,26 @@ class ImageDefectHandler(tornado.web.RequestHandler):
         return window, (offset_y, offset_x)
 
     def map_boxes_to_original(self, results, offset, roi, border_expand, img_shape):
-        """
-        将检测框坐标从窗口坐标系映射回原图坐标系
-        
+        """将检测框坐标从窗口坐标系映射回原图坐标系.
+
         Args:
             results: YOLO推理结果
             offset: (offset_y, offset_x) 窗口左上角在原图上的偏移
             roi: (y1, x1, y2, x2) 原始窗口（无外扩）在原图上的坐标
             border_expand: 边框外扩像素数
             img_shape: 原图尺寸 (H, W)
-        
+
         Returns:
             list of dict，每个dict包含 box, confidence, code 等字段
         """
         offset_y, offset_x = offset
-        img_h, img_w = img_shape[:2]
+        _img_h, _img_w = img_shape[:2]
         detections = []
 
         # 原始窗口（无外扩）在扩展窗口中的位置
         # 由于外扩是向外扩展，原始窗口在扩展窗口中的起始位置是 border_expand
-        roi_in_window_y1 = border_expand
-        roi_in_window_x1 = border_expand
-        roi_in_window_y2 = border_expand + (roi[2] - roi[0])
-        roi_in_window_x2 = border_expand + (roi[3] - roi[1])
+        border_expand + (roi[2] - roi[0])
+        border_expand + (roi[3] - roi[1])
 
         for result in results:
             boxes = result.boxes
@@ -426,26 +399,25 @@ class ImageDefectHandler(tornado.web.RequestHandler):
                 # 对于跨越边界的框，使用裁剪后的坐标
                 # 但保留原始检测框用于NMS合并
                 detection = {
-                    'code': class_name,
-                    'box': [int(orig_x1), int(orig_y1), int(orig_x2), int(orig_y2)],
-                    'clip_box': [int(clip_x1), int(clip_y1), int(clip_x2), int(clip_y2)],
-                    'confidence': confidence,
-                    'area': (clip_x2 - clip_x1) * (clip_y2 - clip_y1),
-                    'length': max(clip_x2 - clip_x1, clip_y2 - clip_y1)
+                    "code": class_name,
+                    "box": [int(orig_x1), int(orig_y1), int(orig_x2), int(orig_y2)],
+                    "clip_box": [int(clip_x1), int(clip_y1), int(clip_x2), int(clip_y2)],
+                    "confidence": confidence,
+                    "area": (clip_x2 - clip_x1) * (clip_y2 - clip_y1),
+                    "length": max(clip_x2 - clip_x1, clip_y2 - clip_y1),
                 }
                 detections.append(detection)
 
         return detections
 
     def sort_detections_by_position(self, detections, grid_rows=None, grid_cols=None):
-        """
-        按位置排序检测结果（先按行再按列，即从上到下、从左到右）
-        
+        """按位置排序检测结果（先按行再按列，即从上到下、从左到右）.
+
         Args:
             detections: 检测结果列表，每个dict包含 box 字段
             grid_rows: 网格行数（可选，用于精确排序）
             grid_cols: 网格列数（可选，用于精确排序）
-        
+
         Returns:
             排序后的检测结果列表
         """
@@ -454,18 +426,18 @@ class ImageDefectHandler(tornado.web.RequestHandler):
 
         # 按框的中心点y坐标排序，相同y再按x排序
         def sort_key(det):
-            box = det['box']
+            box = det["box"]
             center_y = (box[1] + box[3]) / 2
             center_x = (box[0] + box[2]) / 2
             return (center_y, center_x)
 
         return sorted(detections, key=sort_key)
 
-    async def process_image_slide_window(self, image_path, pose_id, sample_id,
-                                          slide_rows, slide_cols, overlap_pixels, border_expand):
-        """
-        基于滑窗的YOLO目标检测推理方法
-        
+    async def process_image_slide_window(
+        self, image_path, pose_id, sample_id, slide_rows, slide_cols, overlap_pixels, border_expand
+    ):
+        """基于滑窗的YOLO目标检测推理方法.
+
         Args:
             image_path: 图片路径
             pose_id: 姿态ID
@@ -474,7 +446,7 @@ class ImageDefectHandler(tornado.web.RequestHandler):
             slide_cols: 滑窗列数
             overlap_pixels: 相邻窗口的交叠像素数
             border_expand: 边框外扩像素数（正数外扩，负数内陷，默认0）
-        
+
         Returns:
             list of dict，检测结果列表
         """
@@ -491,8 +463,10 @@ class ImageDefectHandler(tornado.web.RequestHandler):
                 raise ValueError(f"No configuration found for pose_id: {pose_id}")
 
             img_height, img_width = img.shape[:2]
-            logger.info(f"Image size: {img_width}x{img_height}, slide: {slide_rows}x{slide_cols}, "
-                       f"overlap: {overlap_pixels}px, border_expand: {border_expand}px")
+            logger.info(
+                f"Image size: {img_width}x{img_height}, slide: {slide_rows}x{slide_cols}, "
+                f"overlap: {overlap_pixels}px, border_expand: {border_expand}px"
+            )
 
             # 计算滑窗位置
             positions = self.calculate_slide_positions(img_height, img_width, slide_rows, slide_cols, overlap_pixels)
@@ -501,8 +475,8 @@ class ImageDefectHandler(tornado.web.RequestHandler):
             all_detections = []
 
             # 对每个区域配置进行滑窗检测
-            for a_label, a_config in pose_config.items():
-                threshold = a_config.get('threshold', 0.25)
+            for a_config in pose_config.values():
+                threshold = a_config.get("threshold", 0.25)
 
                 # 应用polygon mask（inner保留区域，outer排除区域）
                 masked_img = apply_region_mask(img, a_config)
@@ -514,31 +488,26 @@ class ImageDefectHandler(tornado.web.RequestHandler):
 
                 # 并行执行推理
                 for window_img, pos, thr in slide_tasks:
-                    roi = pos['roi']
+                    roi = pos["roi"]
 
                     # 提取窗口（含外扩处理）
                     window, offset = self.extract_window(window_img, roi, border_expand)
 
                     # 执行推理
                     results = await tornado.ioloop.IOLoop.current().run_in_executor(
-                        self.executor,
-                        self.run_yolo_inference,
-                        window,
-                        self.imgsz
+                        self.executor, self.run_yolo_inference, window, self.imgsz
                     )
 
                     # 映射坐标回原图
-                    detections = self.map_boxes_to_original(
-                        results, offset, roi, border_expand, img.shape
-                    )
+                    detections = self.map_boxes_to_original(results, offset, roi, border_expand, img.shape)
 
                     # 过滤置信度低于阈值的检测结果
-                    detections = [d for d in detections if d['confidence'] > thr]
+                    detections = [d for d in detections if d["confidence"] > thr]
 
                     # 标记检测结果所属的窗口位置（用于后续排序）
                     for det in detections:
-                        det['slide_row'] = pos['row']
-                        det['slide_col'] = pos['col']
+                        det["slide_row"] = pos["row"]
+                        det["slide_col"] = pos["col"]
 
                     all_detections.extend(detections)
 
@@ -554,11 +523,11 @@ class ImageDefectHandler(tornado.web.RequestHandler):
             final_results = []
             for det in sorted_detections:
                 result = {
-                    'code': det['code'],
-                    'box': det['box'],
-                    'area': det['area'],
-                    'length': det['length'],
-                    'confidence': det['confidence']
+                    "code": det["code"],
+                    "box": det["box"],
+                    "area": det["area"],
+                    "length": det["length"],
+                    "confidence": det["confidence"],
                 }
                 final_results.append(result)
 
@@ -566,82 +535,78 @@ class ImageDefectHandler(tornado.web.RequestHandler):
             return final_results
 
         except Exception as e:
-            logger.warning(f"Error in process_image_slide_window: {str(e)}")
+            logger.warning(f"Error in process_image_slide_window: {e!s}")
             raise
 
-
-
-
-
     def draw_defects(self, image_path, defects, sample_id="", output_dir="res"):
-        """
-        绘制检测结果到res文件夹，按年/月/日/Sxxxxxxx编号的文件夹结构保存
-        """
+        """绘制检测结果到res文件夹，按年/月/日/Sxxxxxxx编号的文件夹结构保存."""
         # 获取当前日期
         now = datetime.now()
         year = now.strftime("%Y")
         month = now.strftime("%m")
         day = now.strftime("%d")
-        
+
         # 创建文件夹结构：res/年/月/日/Sxxxxxxx
         save_dir = os.path.join(output_dir, year, month, day, sample_id)
         os.makedirs(save_dir, exist_ok=True)
-        
+
         # 读取原始图片
         img = cv2.imread(image_path)
         if img is None:
             logger.warning(f"Cannot read image: {image_path}")
             return None
-        
+
         # 绘制每个缺陷
         for defect in defects:
-            box = defect.get('box', [])
-            code = defect.get('code', 'unknown')
-            confidence = defect.get('confidence', 0.0)
-            
+            box = defect.get("box", [])
+            code = defect.get("code", "unknown")
+            confidence = defect.get("confidence", 0.0)
+
             if len(box) == 4:
                 x1, y1, x2, y2 = box
                 # 绘制矩形框
                 cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
                 # 添加标签和分数
                 label = f"{code}: {confidence:.2f}"
-                cv2.putText(img, label, (x1, y1 - 10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-        
+                cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
         # 生成输出文件名
         base_name = os.path.basename(image_path)
         output_path = os.path.join(save_dir, f"detected_{base_name}")
-        
+
         # 保存绘制结果
         cv2.imwrite(output_path, img)
         logger.info(f"Detection results saved to: {output_path}")
-        
-        return output_path
-        
 
+        return output_path
 
 
 def make_app(template_dir, mask_dir, config_path):
-    return tornado.web.Application([
-        (r"/industry/image_defect", ImageDefectHandler, 
-         {"template_dir": template_dir, "mask_dir": mask_dir, "config_path": config_path}),
-    ])
+    return tornado.web.Application(
+        [
+            (
+                r"/industry/image_defect",
+                ImageDefectHandler,
+                {"template_dir": template_dir, "mask_dir": mask_dir, "config_path": config_path},
+            ),
+        ]
+    )
 
 
 if __name__ == "__main__":
     template_dir = "templates"
     mask_dir = "masks"
     config_path = "config\\assemble_detect_item.json"
-    
+
     os.makedirs(template_dir, exist_ok=True)
     os.makedirs(mask_dir, exist_ok=True)
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    
+
     # 从配置文件读取端口号，未配置则默认8000
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         server_config = json.load(f)
     port = int(server_config.get("port", 8000))
-    
+
     app = make_app(template_dir, mask_dir, config_path)
     app.listen(port)
     logger.info(f"Server is running on port {port}")

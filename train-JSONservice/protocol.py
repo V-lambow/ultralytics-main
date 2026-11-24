@@ -1,4 +1,4 @@
-"""Payload 与 stdout 事件协议：子进程进、父进程出的唯一通道。"""
+"""Payload 与 stdout 事件协议：子进程进、父进程出的唯一通道。."""
 
 import json
 import os
@@ -143,7 +143,7 @@ def parse_line(line):
 
 
 class EventLogStream:
-    """把子进程 stdout 的文本切成 training_log 事件，换行与回车都作为分隔符。"""
+    """把子进程 stdout 的文本切成 training_log 事件，换行与回车都作为分隔符。."""
 
     def __init__(self, event="training_log"):
         self._event = event

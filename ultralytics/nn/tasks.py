@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
@@ -18,8 +18,6 @@ from ultralytics.nn.modules import (
     C2PSA,
     C3,
     C3TR,
-    DCNv2,
-    DCNv4,
     ELAN1,
     OBB,
     OBB26,
@@ -46,6 +44,9 @@ from ultralytics.nn.modules import (
     Conv,
     Conv2,
     ConvTranspose,
+    CPA_arch,
+    DCNv2,
+    DCNv4,
     Detect,
     DWConv,
     DWConvTranspose2d,
@@ -75,7 +76,6 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    CPA_arch,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,

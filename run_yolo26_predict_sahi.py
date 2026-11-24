@@ -20,8 +20,15 @@ def parseArgs():
     default_device = "0" if use_cuda else "cpu"
 
     parser = argparse.ArgumentParser(description="YOLO26 SAHI Sliced Prediction Script")
-    parser.add_argument("--model", type=str, default="yolo26n.pt", help="model path e.g. yolo26n.pt, runs/detect/train/weights/best.pt")
-    parser.add_argument("--source", type=str, default="ultralytics/assets/bus.jpg", help="image/video/dir/URL e.g. 0 for webcam, path/to/image.jpg, folder/")
+    parser.add_argument(
+        "--model", type=str, default="yolo26n.pt", help="model path e.g. yolo26n.pt, runs/detect/train/weights/best.pt"
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default="ultralytics/assets/bus.jpg",
+        help="image/video/dir/URL e.g. 0 for webcam, path/to/image.jpg, folder/",
+    )
     parser.add_argument("--imgsz", type=int, default=640, help="inference image size")
     parser.add_argument("--conf", type=float, default=0.25, help="confidence threshold")
     parser.add_argument("--device", type=str, default=default_device, help="device: 0, cpu, or 0,1,2,3")
@@ -29,10 +36,20 @@ def parseArgs():
     parser.add_argument("--slice-width", type=int, default=512, help="slice width for sliced inference")
     parser.add_argument("--overlap-height-ratio", type=float, default=0.2, help="slice overlap ratio in height")
     parser.add_argument("--overlap-width-ratio", type=float, default=0.2, help="slice overlap ratio in width")
-    parser.add_argument("--postprocess-type", type=str, default="GREEDYNMM", choices=["GREEDYNMM", "NMM", "NMS", "LSNMS"], help="slice merge postprocess type")
-    parser.add_argument("--postprocess-match-metric", type=str, default="IOS", choices=["IOS", "IOU"], help="slice merge match metric")
+    parser.add_argument(
+        "--postprocess-type",
+        type=str,
+        default="GREEDYNMM",
+        choices=["GREEDYNMM", "NMM", "NMS", "LSNMS"],
+        help="slice merge postprocess type",
+    )
+    parser.add_argument(
+        "--postprocess-match-metric", type=str, default="IOS", choices=["IOS", "IOU"], help="slice merge match metric"
+    )
     parser.add_argument("--postprocess-match-threshold", type=float, default=0.5, help="slice merge match threshold")
-    parser.add_argument("--no-standard-pred", action="store_true", help="disable full image prediction on top of sliced predictions")
+    parser.add_argument(
+        "--no-standard-pred", action="store_true", help="disable full image prediction on top of sliced predictions"
+    )
     parser.add_argument("--batch-size", type=int, default=1, help="batch size for slice inference")
     parser.add_argument("--classes", type=int, nargs="+", default=None, help="filter by class: 0 or 0 2 3")
     parser.add_argument("--show", action="store_true", help="show results in window")
@@ -110,7 +127,9 @@ def processImage(source, label, stem, model, args, save_dir):
     if save_dir is None:
         return
     if args.save:
-        results.export_visuals(export_dir=str(save_dir), file_name=stem, hide_conf=args.hide_conf, rect_th=args.line_width)
+        results.export_visuals(
+            export_dir=str(save_dir), file_name=stem, hide_conf=args.hide_conf, rect_th=args.line_width
+        )
     if args.save_txt:
         writeTxt(save_dir / f"{stem}.txt", results)
 
@@ -143,7 +162,9 @@ def processVideo(source, label, stem, model, args, save_dir):
         if txt_path is not None:
             for p in results.object_prediction_list:
                 x1, y1, x2, y2 = p.bbox.to_xyxy()
-                txt_lines.append(f"{frame_idx} {int(p.category.id)} {p.score.value:.4f} {x1:.1f} {y1:.1f} {x2:.1f} {y2:.1f}")
+                txt_lines.append(
+                    f"{frame_idx} {int(p.category.id)} {p.score.value:.4f} {x1:.1f} {y1:.1f} {x2:.1f} {y2:.1f}"
+                )
         if args.show:
             cv2.imshow("YOLO26 SAHI", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):

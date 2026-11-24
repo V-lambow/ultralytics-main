@@ -27,17 +27,17 @@
 
 ## 功能特性
 
-| 特性 | 说明 |
-|------|------|
-| 远程训练控制 | `train` / `pause` / `holdon` / `stop` / `status`，通过 ZMQ REQ-REP 同步下发 |
-| 实时指标广播 | 每个 epoch 结束通过 PUB 推送 loss、P、R、mAP50、mAP50-95、分项 loss |
-| 多客户端订阅 | SUB 可同时开多个进程观测同一训练，互不影响 |
-| 断点续训 | `pause` 保存 `last.pt`，`holdon` 以 `resume` 恢复训练 |
-| ROI 裁剪 | `useRoi` 开启后，训练集与验证集都只保留 ROI 区域；支持 `detect` / `segment` / `pose` / `obb` |
-| 验证回映射 | 验证时的指标、可视化、`save_txt` / `save_json` 坐标都可回到原图坐标系 |
-| 信号退出 | `SIGINT` / `SIGTERM` 优雅关闭，socket `LINGER=0` 避免挂起 |
-| 输出隔离 | 结果固定写入配置文件同级的 `output/<alias>/` |
-| 可打包 | 附带 `train_service.spec`，PyInstaller onedir 模式产出独立目录 |
+| 特性         | 说明                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| 远程训练控制 | `train` / `pause` / `holdon` / `stop` / `status`，通过 ZMQ REQ-REP 同步下发                  |
+| 实时指标广播 | 每个 epoch 结束通过 PUB 推送 loss、P、R、mAP50、mAP50-95、分项 loss                          |
+| 多客户端订阅 | SUB 可同时开多个进程观测同一训练，互不影响                                                   |
+| 断点续训     | `pause` 保存 `last.pt`，`holdon` 以 `resume` 恢复训练                                        |
+| ROI 裁剪     | `useRoi` 开启后，训练集与验证集都只保留 ROI 区域；支持 `detect` / `segment` / `pose` / `obb` |
+| 验证回映射   | 验证时的指标、可视化、`save_txt` / `save_json` 坐标都可回到原图坐标系                        |
+| 信号退出     | `SIGINT` / `SIGTERM` 优雅关闭，socket `LINGER=0` 避免挂起                                    |
+| 输出隔离     | 结果固定写入配置文件同级的 `output/<alias>/`                                                 |
+| 可打包       | 附带 `train_service.spec`，PyInstaller onedir 模式产出独立目录                               |
 
 ---
 
@@ -130,13 +130,13 @@ python main.py --config config.json --cmd stop
 
 `main.py` 有三种模式，由参数组合决定：
 
-| 参数组合 | 模式 | 说明 |
-|----------|------|------|
-| `--config <json>` | 服务端 | 启动服务并阻塞，端口取自 `train.port` |
+| 参数组合                      | 模式   | 说明                                             |
+| ----------------------------- | ------ | ------------------------------------------------ |
+| `--config <json>`             | 服务端 | 启动服务并阻塞，端口取自 `train.port`            |
 | `--config <json> --cmd <cmd>` | 客户端 | 向运行中的服务发送一条命令，打印 JSON 响应后退出 |
-| `--config <json> --subscribe` | 订阅端 | 持续接收推送，`Ctrl+C` 退出（不影响服务端） |
-| `--subscribe` | 订阅端 | 不带 `--config` 时用默认端口 9257 |
-| 无参数 / 缺 `--config` | — | `argparse` 直接报错退出 |
+| `--config <json> --subscribe` | 订阅端 | 持续接收推送，`Ctrl+C` 退出（不影响服务端）      |
+| `--subscribe`                 | 订阅端 | 不带 `--config` 时用默认端口 9257                |
+| 无参数 / 缺 `--config`        | —      | `argparse` 直接报错退出                          |
 
 `--cmd` 的可用取值：`train`、`pause`、`holdon`、`stop`、`status`。
 
@@ -173,22 +173,22 @@ python main.py --config config.json --cmd stop
 
 ### train 字段
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `port` | int | `9257` | PUB 端口；REP 端口固定为 `port + 1` |
-| `modelPath` | string | `"yolo26n.pt"` | 权重或模型 YAML，**建议绝对路径** |
-| `dataYaml` | string | `"coco8.yaml"` | 数据集配置，**建议绝对路径** |
-| `epochs` | int | `100` | 训练轮数 |
-| `batch` | int | `16` | 批大小，`-1` 触发 AutoBatch |
-| `imgsz` | int | `640` | 输入尺寸（ROI 模式下作用于裁剪后的图） |
-| `device` | string | `"auto"` | `auto` → 有 CUDA 用 `"0"`，否则 `"cpu"`；也可写 `"0"`、`"0,1"`、`"cpu"` |
-| `amp` | bool | `true` | 混合精度 |
-| `cos_lr` | bool | `false` | 余弦学习率调度 |
-| `optimizer` | string | `"auto"` | `auto` / `SGD` / `AdamW` / `Adam` |
-| `task` | string | `"detect"` | `detect` / `segment` / `pose` / `obb`，**必须与 `modelPath` 的任务一致** |
-| `alias` | string | `""` | 输出子目录名（映射到 `name`）；为空时由 ultralytics 生成 `train`、`train2`… |
-| `useRoi` | bool | `false` | 是否启用 ROI 裁剪 |
-| `roi` | object | — | ROI 矩形，见下节 |
+| 字段        | 类型   | 默认值         | 说明                                                                        |
+| ----------- | ------ | -------------- | --------------------------------------------------------------------------- |
+| `port`      | int    | `9257`         | PUB 端口；REP 端口固定为 `port + 1`                                         |
+| `modelPath` | string | `"yolo26n.pt"` | 权重或模型 YAML，**建议绝对路径**                                           |
+| `dataYaml`  | string | `"coco8.yaml"` | 数据集配置，**建议绝对路径**                                                |
+| `epochs`    | int    | `100`          | 训练轮数                                                                    |
+| `batch`     | int    | `16`           | 批大小，`-1` 触发 AutoBatch                                                 |
+| `imgsz`     | int    | `640`          | 输入尺寸（ROI 模式下作用于裁剪后的图）                                      |
+| `device`    | string | `"auto"`       | `auto` → 有 CUDA 用 `"0"`，否则 `"cpu"`；也可写 `"0"`、`"0,1"`、`"cpu"`     |
+| `amp`       | bool   | `true`         | 混合精度                                                                    |
+| `cos_lr`    | bool   | `false`        | 余弦学习率调度                                                              |
+| `optimizer` | string | `"auto"`       | `auto` / `SGD` / `AdamW` / `Adam`                                           |
+| `task`      | string | `"detect"`     | `detect` / `segment` / `pose` / `obb`，**必须与 `modelPath` 的任务一致**    |
+| `alias`     | string | `""`           | 输出子目录名（映射到 `name`）；为空时由 ultralytics 生成 `train`、`train2`… |
+| `useRoi`    | bool   | `false`        | 是否启用 ROI 裁剪                                                           |
+| `roi`       | object | —              | ROI 矩形，见下节                                                            |
 
 `plots=True`、`exist_ok=True`、`project=<config 同级>/output` 在代码里写死，不可配置。
 
@@ -198,10 +198,10 @@ python main.py --config config.json --cmd stop
 
 ### roi 字段
 
-| 字段 | 说明 |
-|------|------|
-| `x`, `y` | ROI 左上角像素坐标，**原图坐标系**（不是裁剪图或缩放图） |
-| `width`, `height` | ROI 宽高，必须 `> 0` |
+| 字段              | 说明                                                     |
+| ----------------- | -------------------------------------------------------- |
+| `x`, `y`          | ROI 左上角像素坐标，**原图坐标系**（不是裁剪图或缩放图） |
+| `width`, `height` | ROI 宽高，必须 `> 0`                                     |
 
 启用条件（同时满足）：`useRoi == true`、`roi` 里同时存在 `x` / `y` / `width` / `height`、`width > 0 且 height > 0`。
 
@@ -227,22 +227,22 @@ REQ/REP，地址 `tcp://localhost:<port + 1>`，JSON 报文。
 { "status": "ok", "message": "Training started" }
 ```
 
-| 命令 | 作用 | 前置条件 | 返回 |
-|------|------|----------|------|
-| `train` | 新起一次训练（`resume=False`） | `training == false` | `{"status": "ok", "message": "Training started"}` |
-| `pause` | 置 `trainer.stop`，当前 epoch 结束后保存 `last.pt` 并退出 | 正在训练 | `{"status": "ok", "message": "Training paused"}` |
-| `holdon` | 用 `resume` 重启训练 | `paused == true` | `{"status": "ok", "message": "Training resumed"}` |
-| `stop` | 同 `pause`，但不置 `paused`，之后不可续训 | 正在训练 | `{"status": "ok", "message": "Training stopped"}` |
-| `status` | 查询状态 | 无 | 见下 |
+| 命令     | 作用                                                      | 前置条件            | 返回                                              |
+| -------- | --------------------------------------------------------- | ------------------- | ------------------------------------------------- |
+| `train`  | 新起一次训练（`resume=False`）                            | `training == false` | `{"status": "ok", "message": "Training started"}` |
+| `pause`  | 置 `trainer.stop`，当前 epoch 结束后保存 `last.pt` 并退出 | 正在训练            | `{"status": "ok", "message": "Training paused"}`  |
+| `holdon` | 用 `resume` 重启训练                                      | `paused == true`    | `{"status": "ok", "message": "Training resumed"}` |
+| `stop`   | 同 `pause`，但不置 `paused`，之后不可续训                 | 正在训练            | `{"status": "ok", "message": "Training stopped"}` |
+| `status` | 查询状态                                                  | 无                  | 见下                                              |
 
 `status` 响应字段：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `status` | string | `"ok"` |
-| `training` | bool | 训练线程是否在运行 |
-| `paused` | bool | 是否处于暂停态（可 `holdon`） |
-| `save_dir` | string \| null | 当前/上次输出目录 |
+| 字段        | 类型           | 说明                             |
+| ----------- | -------------- | -------------------------------- |
+| `status`    | string         | `"ok"`                           |
+| `training`  | bool           | 训练线程是否在运行               |
+| `paused`    | bool           | 是否处于暂停态（可 `holdon`）    |
+| `save_dir`  | string \| null | 当前/上次输出目录                |
 | `last_ckpt` | string \| null | `output/<alias>/weights/last.pt` |
 
 失败时统一返回：
@@ -261,27 +261,27 @@ PUB socket 使用两帧 multipart：`[topic][json]`。
 
 ### `metrics`（每个 epoch 结束）
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `epoch` | int | 当前轮次，从 1 开始 |
-| `total_epochs` | int | 总轮数 |
-| `loss` | float | `trainer.loss` |
-| `box_loss` / `cls_loss` / `dfl_loss` | float | `trainer.tloss[0/1/2]` |
-| `precision` / `recall` | float | `metrics/precision(B)`、`metrics/recall(B)` |
-| `mAP50` / `mAP50_95` | float | `metrics/mAP50(B)`、`metrics/mAP50-95(B)` |
+| 字段                                 | 类型  | 说明                                        |
+| ------------------------------------ | ----- | ------------------------------------------- |
+| `epoch`                              | int   | 当前轮次，从 1 开始                         |
+| `total_epochs`                       | int   | 总轮数                                      |
+| `loss`                               | float | `trainer.loss`                              |
+| `box_loss` / `cls_loss` / `dfl_loss` | float | `trainer.tloss[0/1/2]`                      |
+| `precision` / `recall`               | float | `metrics/precision(B)`、`metrics/recall(B)` |
+| `mAP50` / `mAP50_95`                 | float | `metrics/mAP50(B)`、`metrics/mAP50-95(B)`   |
 
 > 三个分项 loss 直接按下标取 `trainer.tloss`，**只对 `detect` 准确**。`segment` 的 `tloss` 是 `(box, seg, cls, dfl)`，`pose` 是 `(box, pose, kobj)`，字段名会对不上。指标本身（P/R/mAP）取的是 box 指标，四种任务都有。
 
 ### `error`
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| 字段      | 类型   | 说明                   |
+| --------- | ------ | ---------------------- |
 | `message` | string | 训练线程捕获的异常文本 |
 
 ### `train_end`
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
+| 字段       | 类型   | 说明     |
+| ---------- | ------ | -------- |
 | `save_dir` | string | 输出目录 |
 
 `pause` 也会触发 `train_end`（训练进程确实退出了），不代表训练真正完成。
@@ -306,12 +306,12 @@ YOLODataset.load_image()      →  先裁图，再按 imgsz 缩放
 
 ### 裁剪内容
 
-| 类型 | 处理 |
-|------|------|
-| bbox | 裁到 ROI 内，重算中心与宽高，归一化到 ROI 尺寸；完全在 ROI 外的目标丢弃 |
-| 多边形 | Sutherland–Hodgman 逐边裁剪；裁完少于 3 个点的目标丢弃 |
+| 类型   | 处理                                                                     |
+| ------ | ------------------------------------------------------------------------ |
+| bbox   | 裁到 ROI 内，重算中心与宽高，归一化到 ROI 尺寸；完全在 ROI 外的目标丢弃  |
+| 多边形 | Sutherland–Hodgman 逐边裁剪；裁完少于 3 个点的目标丢弃                   |
 | 关键点 | 坐标裁到 ROI 内并重新归一化；落在 ROI 外的关键点可见性置 0，目标本身保留 |
-| OBB | 多边形裁剪后由 `xyxyxyxy2xywhr` 重新生成旋转框 |
+| OBB    | 多边形裁剪后由 `xyxyxyxy2xywhr` 重新生成旋转框                           |
 
 ### 验证与可视化
 
@@ -351,11 +351,11 @@ holdon ──►  join(old thread, 30s) ───┤  置 resume → 新建训�
                               YOLO.train(resume=True)
 ```
 
-| 命令 | 实际行为 | 可否续训 |
-|------|----------|----------|
-| `pause` | 终止当前训练，保存 `last.pt`，广播 `train_end` | 可以，用 `holdon` |
-| `holdon` | 从 checkpoint 恢复，`project` / `name` 沿用 checkpoint 里记录的值 | — |
-| `stop` | 同样终止训练，但不置 `paused` | 不可以（`holdon` 会返回 `Not paused`） |
+| 命令     | 实际行为                                                          | 可否续训                               |
+| -------- | ----------------------------------------------------------------- | -------------------------------------- |
+| `pause`  | 终止当前训练，保存 `last.pt`，广播 `train_end`                    | 可以，用 `holdon`                      |
+| `holdon` | 从 checkpoint 恢复，`project` / `name` 沿用 checkpoint 里记录的值 | —                                      |
+| `stop`   | 同样终止训练，但不置 `paused`                                     | 不可以（`holdon` 会返回 `Not paused`） |
 
 `stop` 之后再 `train` 是**从头训练**，并且因为 `exist_ok=True` 会写回同一个输出目录，可能覆盖上一次结果。想保留现场用 `pause`。
 
@@ -390,25 +390,27 @@ holdon ──►  join(old thread, 30s) ───┤  置 resume → 新建训�
 
 ```python
 import json
+
 from train_service import TrainService
 
 with open("config.json", encoding="utf-8") as f:
     cfg = json.load(f)
 
 service = TrainService(cfg, "config.json")
-service.start_server()          # 阻塞
+service.start_server()  # 阻塞
 ```
 
 ### 从自己的程序下发命令
 
 ```python
 import json
+
 import zmq
 
 ctx = zmq.Context()
 req = ctx.socket(zmq.REQ)
 req.setsockopt(zmq.LINGER, 0)
-req.connect("tcp://localhost:9258")      # port + 1
+req.connect("tcp://localhost:9258")  # port + 1
 
 req.send_json({"cmd": "status"})
 print(req.recv_json())
@@ -421,13 +423,14 @@ ctx.term()
 
 ```python
 import json
+
 import zmq
 
 ctx = zmq.Context()
 sub = ctx.socket(zmq.SUB)
 sub.setsockopt(zmq.LINGER, 0)
-sub.connect("tcp://localhost:9257")      # port
-sub.setsockopt(zmq.SUBSCRIBE, b"")       # 订阅全部 topic
+sub.connect("tcp://localhost:9257")  # port
+sub.setsockopt(zmq.SUBSCRIBE, b"")  # 订阅全部 topic
 
 while True:
     topic, payload = sub.recv_multipart()
@@ -443,19 +446,19 @@ cd train_service
 pyinstaller train_service.spec
 ```
 
-| 配置 | 值 | 含义 |
-|------|-----|------|
-| 入口 | `main.py` | `train_service.py` 由 import 自动收入 |
-| `console` | `True` | 保留控制台，服务端要看日志 |
-| `exclude_binaries` + `COLLECT` | `True` | onedir 模式，输出 `dist/train_service/` |
-| `upx` | `True` | 有 UPX 时压缩，没装自动跳过 |
-| `datas` / `binaries` | 空 | 不额外打包数据文件 |
+| 配置                           | 值        | 含义                                    |
+| ------------------------------ | --------- | --------------------------------------- |
+| 入口                           | `main.py` | `train_service.py` 由 import 自动收入   |
+| `console`                      | `True`    | 保留控制台，服务端要看日志              |
+| `exclude_binaries` + `COLLECT` | `True`    | onedir 模式，输出 `dist/train_service/` |
+| `upx`                          | `True`    | 有 UPX 时压缩，没装自动跳过             |
+| `data` / `binaries`           | 空        | 不额外打包数据文件                      |
 
 打包后注意：
 
 1. **权重、数据集 YAML、字体都不会打进去**。配置里一律用绝对路径，或把文件放到 exe 旁边
 2. **绘图字体**：matplotlib 风格校验会找 `Arial.ttf`，ultralytics 的查找顺序是 `~/.config/Ultralytics/` → 系统字体 → 联网下载到 `~/.config/Ultralytics/`。离线机器上第一次画图会失败，请提前把 `Arial.ttf` 放进 `%USERPROFILE%\.config\Ultralytics\`
-   仓库里的 `ultralytics/Arial.ttf` **不会被自动使用**（不在查找路径内），需要显式拷到上面那个目录或打进 `datas`
+   仓库里的 `ultralytics/Arial.ttf` **不会被自动使用**（不在查找路径内），需要显式拷到上面那个目录或打进 `data`
 3. **ultralytics 的 YAML 模型配置**在运行时读取，需保证可访问
 4. **Ultralytics 配置目录**：首次运行会创建 `~/.config/Ultralytics/`
 5. **PyInstaller + torch**：遇到 `.dist-info` 的 `UnicodeDecodeError`，参考 `README_detect_server_slidewind.md` 里的 `importlib.metadata` monkey-patch
@@ -488,16 +491,16 @@ pyinstaller train_service.spec
 
 ## 排障
 
-| 现象 | 排查方向 |
-|------|----------|
-| `--cmd` 一直卡住 | 服务没起、端口不一致（`port` vs `port + 1`）、防火墙拦截 |
-| 收不到指标 | 订阅端晚于训练启动（PUB 不回放）；`--config` 里的 `port` 与服务端不一致 |
-| 训练没开始就 `training: false` | 起订阅端看 `error` 主题；常见是 `dataYaml` / `modelPath` 路径错、`task` 与权重不匹配 |
-| 输出目录被覆盖 | `exist_ok=True` + 相同 `alias`；换 `alias` 或先清理旧目录 |
-| ROI 没生效 | 启动日志里有没有 `ROI enabled: (x, y, w, h)`；`useRoi` 拼写；`roi` 四个字段是否齐全且宽高 > 0 |
-| 验证图框位置不对 | 见[已知问题](#已知问题)第 1 条，当前实现的坐标回映射在缩图场景有偏差 |
-| `holdon` 报 `Resume checkpoint not found` | 见[已知问题](#已知问题)第 2 条，续训找的是 CWD 下的 `last.pt` |
-| 内存暴涨 | `workers` 默认 8（Windows 每 worker 重新 import torch）；改代码降 `workers` 后重启 |
+| 现象                                      | 排查方向                                                                                      |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `--cmd` 一直卡住                          | 服务没起、端口不一致（`port` vs `port + 1`）、防火墙拦截                                      |
+| 收不到指标                                | 订阅端晚于训练启动（PUB 不回放）；`--config` 里的 `port` 与服务端不一致                       |
+| 训练没开始就 `training: false`            | 起订阅端看 `error` 主题；常见是 `dataYaml` / `modelPath` 路径错、`task` 与权重不匹配          |
+| 输出目录被覆盖                            | `exist_ok=True` + 相同 `alias`；换 `alias` 或先清理旧目录                                     |
+| ROI 没生效                                | 启动日志里有没有 `ROI enabled: (x, y, w, h)`；`useRoi` 拼写；`roi` 四个字段是否齐全且宽高 > 0 |
+| 验证图框位置不对                          | 见[已知问题](#已知问题)第 1 条，当前实现的坐标回映射在缩图场景有偏差                          |
+| `holdon` 报 `Resume checkpoint not found` | 见[已知问题](#已知问题)第 2 条，续训找的是 CWD 下的 `last.pt`                                 |
+| 内存暴涨                                  | `workers` 默认 8（Windows 每 worker 重新 import torch）；改代码降 `workers` 后重启            |
 
 ---
 

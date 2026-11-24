@@ -331,8 +331,8 @@ def build_dataloader(
         rank (int, optional): Process rank in distributed training. -1 for single-GPU training.
         drop_last (bool, optional): Whether to drop the last incomplete batch.
         pin_memory (bool, optional): Whether to use pinned memory for dataloader.
-        sampler (torch.utils.data.Sampler, optional): Custom sampler overriding shuffle and the distributed
-            sampler; its length defines the per-epoch draw budget.
+        sampler (torch.utils.data.Sampler, optional): Custom sampler overriding shuffle and the distributed sampler; its
+            length defines the per-epoch draw budget.
 
     Returns:
         (InfiniteDataLoader): A dataloader that can be used for training or validation.

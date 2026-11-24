@@ -2,7 +2,6 @@ import argparse
 import json
 import logging
 import signal
-import sys
 from multiprocessing import freeze_support
 
 import zmq
@@ -94,14 +93,12 @@ def main():
         choices=["train", "pause", "holdon", "stop", "status"],
         help="Send command to running service",
     )
-    parser.add_argument(
-        "--subscribe", action="store_true", help="Subscribe to training metrics"
-    )
+    parser.add_argument("--subscribe", action="store_true", help="Subscribe to training metrics")
     args = parser.parse_args()
 
     config = {}
     if args.config:
-        with open(args.config, "r", encoding="utf-8") as f:
+        with open(args.config, encoding="utf-8") as f:
             config = json.load(f)
 
     if args.subscribe:
