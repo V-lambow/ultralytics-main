@@ -127,7 +127,7 @@
 | ⑨ 结构校验 | 缺字段、类型错、两种传图方式冲突 | 200 + -1002 | 否 |
 | ⑨ 文件名校验 | 空白名、非法字符、扩展名不支持 | 200 + -1003 | 否 |
 | ⑩ 装图 | base64 解码失败、共享盘文件不存在、图片解不开 | 200 + -1004 | 否 |
-| ⑪ 推理异常 | 引擎内部错误（整体失败，无部分成功） | 200 + -1001，查服务端 [ERROR] 日志 | 是 |
+| ⑪ 推理异常 | 引擎内部错误（整体失败，无部分成功） | 200 + -1001，查 `log/` 下 `[RESP] [错误]` 日志 | 是 |
 
 ### 1.3 HTTP 报文级交互示例
 
@@ -266,7 +266,7 @@ results 条目：
 | 请求体超限 / chunked | 不读 body，直接 200 + -1002，连接关闭 | `error_code=-1002`（invalid content length） | 压缩图片或调 `kMaxBodyBytes` |
 | JSON / UTF-8 非法 | 200 + -1002 | `error_code=-1002` | 检查序列化（勿手动拼 JSON 字符串） |
 | 图片数据问题 | 200 + -1004 | `error_code=-1004` | base64：核对编码与完整性；共享盘：核对服务端 `share_root` 与落盘完成状态 |
-| 推理异常 | 200 + -1001，日志 [ERROR] | `error_code=-1001` | 看服务端日志定位（模型缺失、显存不足等） |
+| 推理异常 | 200 + -1001，日志 `[RESP] [错误]` | `error_code=-1001` | 看 `log/` 日志定位（模型缺失、显存不足等） |
 | 服务端被 Ctrl+C | 监听关闭，在途请求响应丢失 | connection failed / 中断 | 客户端重试；产线建议由进程管理器守护 |
 
 ---
@@ -288,6 +288,7 @@ shimada-predict_service/
 ├── USAGE.md         # 使用手册
 ├── shared/          # 服务端共享盘根目录（启动时自动创建，share_root 可改）
 │   └── demo/        # 测试用相对目录（由客户端 gen-images 生成）
+├── log/             # 运行日志（启动时自动创建，按日期命名，最多保留 30 个文件）
 └── test_images/     # 客户端生成的本地测试图（gen-images 默认输出）
 ```
 
@@ -331,7 +332,10 @@ shimada-predict_service/
 | `kModelAliasPattern` | 模型别名白名单：`^[A-Za-z0-9_.-]{1,64}$`，因别名会进日志与配置引用，禁止中文/空格/引号 |
 | `kWorkpiecePattern` | 工件型号白名单：`^\S{1,64}$`（不允许空白，最长 64 字符）；型号要进日志，未限制为纯 ASCII 以便兼容中文型号 |
 | `kDefaultModelConf` = 0.25 | 模型条目未写 `conf` 时的默认置信度阈值 |
+| `kLogDirName` = `"log"` / `kLogRetention` = 30 | 日志目录名（工作目录下）与保留的日志文件个数上限 |
+| `kLogFilePattern` | 日志文件名正则 `^\d{8}\.log$`，只有按日期命名的文件参与保留计数与清理 |
 | `makeError(code, msg=None)` | 构造 `{"error_code":..., "error_msg":...}`；msg 缺省时查 `kErrorMsg` |
+| `logLine(message)` | 统一日志出口：加时间戳后打印到控制台并追加到 `log/YYYYMMDD.log`；跨天首次写入时清理旧文件 |
 | `readImageInfo(bytes)` | 用 PIL 从内存图片读取 `(width, height)`；PIL 缺失、解码失败均返回 `None`（后续映射为 -1004） |
 
 ### 4.2 推理引擎
@@ -408,7 +412,7 @@ do_POST
 - 两个"未读 body 就提前返回"的分支（路径 404、body 超限）额外发送 `Connection: close` 并断开连接：这两分支没有消费请求体，若复用连接，socket 缓冲区里的残留 body 会污染下一个请求。
 - `send_response / send_header` 由 `sendJson` 统一处理：`Content-Type: application/json; charset=utf-8`，可选附加头（当前为 `X-Process-Ms` 与 `Connection: close`）。
 - `do_GET` 统一返回 404 + -1002（提示 use POST），方便排查用浏览器误访问的情况。
-- 访问日志走 `log_message`（BaseHTTPRequestHandler 的标准访问行），业务日志 `[REQ] job_id=... workpiece=... models=... files=N mode=... -> error_code=... elapsed=...ms` 与 `[ERROR]` 均打印到 stdout，全部英文。
+- 访问日志由 `log_message` 置空关闭（BaseHTTPRequestHandler 的标准访问行与业务日志重复）；所有业务日志统一走 `logLine`，见 §4.7。
 
 ### 4.5 启动流程（`main`）
 
@@ -417,7 +421,7 @@ do_POST
 3. `loadWorkpieces` 校验 `workpieces`：键匹配 `^\S{1,64}$`、值是非空数组、数组元素必须是 `models` 里已存在的别名且同一型号内不重复；空表 `{}` 合法。
 4. `buildModels` 按别名构建引擎：`path` 为 `null` → `MockEngine(alias)`，否则 `YoloEngine(alias, path, device, conf)`（此时才 import ultralytics 并加载权重，fail-fast）。配对表不参与这一步，所有别名一律加载。
 5. `os.makedirs(share_root, exist_ok=True)` 保证共享根存在。
-6. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，打印 config / endpoint / default / 每个 model / 每个 workpiece / share root 若干行配置。
+6. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，通过 `logLine` 输出 config / endpoint / default / 每个 model / 每个 workpiece / share root（见 §4.7）。
 7. `serve_forever()`；`Ctrl+C` 优雅退出（`server_close()`）。
 
 配置在启动时读一次，运行期不重读：改 `models`（增删模型、换权重、改 conf）、`workpieces`（改配对）或 `host / port / endpoint / device / share_root` 都必须重启服务才生效，请求里没有任何字段能覆盖它们。
@@ -455,6 +459,37 @@ def resolveHandles(fileNames):
 - `workpieceModels(型号)` 返回**引擎句柄列表**（`handle.alias` 即别名），未知型号返回 `None`；进程内直接用 `resolveHandles`，它已经把回落逻辑封装好。
 - `processRequest` 按"外层图片、内层模型"执行：`for 图: for handle in handles: predict`，结果按顺序合并进 `results`，每条补 `file_name`；响应仍严格按协议字段，不新增模型字段。耗时 ≈ 单模型耗时 × 模型数（`g_inferLock` 串行）。
 - 校验：引用不存在的别名、同一型号里重复写同一别名、值为空数组、键含空白，都会在启动阶段报错退出。`workpieces: {}` 合法（等价于没有配对，全部走回落）。
+
+### 4.7 运行日志（`log/`）
+
+所有日志走唯一出口 `logLine(message)`：加 `YYYY-MM-DD HH:MM:SS` 前缀后**同时**打印到控制台并追加到 `log/YYYYMMDD.log`（UTF-8、LF）。文件按**写入当天**命名，进程跨天运行会自动写到新文件，不需要重启。
+
+- 目录固定为**工作目录**下的 `log/`（与 `config.json` 同基准），不存在时自动创建；目录不可写时只打印一次 `[WARN] log file disabled`，服务继续运行，不影响推理。
+- **保留策略**：`kLogRetention = 30`，只统计匹配 `^\d{8}\.log$` 的文件；跨天首次写入时按文件名排序删除最旧的，直到剩 30 个（含当天）。同一天内重启不会触发清理，也不会新建文件。
+- 并发安全：`g_logLock` 串行化"打印 + 写文件 + 清理"，多线程并发请求不会写出交错的行。
+
+日志内容分五类，`[REQ]` / `[RESP]` 每个请求各一行：
+
+| 标签 | 触发时机 | 字段 |
+|---|---|---|
+| `[SERVICE]` | 启动、停止、配置非法 | `starting`（config / endpoint / default_model / device / share_root）、`started`（pid / log 目录）、`[错误] [ng]` + 退出原因、`stopped` |
+| `[MODEL]` | 每个别名构建完成时 | `loaded`：alias / path / engine=mock 或 yolo / conf；失败为 `[错误] [ng]` + alias / path / error |
+| `[WORKPIECE]` | 启动时每个配对项一行 | `型号 -> 别名1, 别名2` |
+| `[REQ]` | body 解析成功、推理之前 | `received`：job_id / sample_id / pose_id / files / mode=base64 或 share_dir |
+| `[RESP]` | 每个响应发出之前 | `[成功] [ok]`：三个 id / files / workpiece / models / defects=CODE:数量,... / total / elapsed；失败为 `[错误] [ng]` + error_code / error_msg / elapsed |
+
+`[RESP]` 里的 `workpiece` / `models` 来自 `resolveHandles` 的实际路由结果（回落时是 `workpiece=- models=<default_model>`），`defects` 按 `code` 聚合计数，无缺陷时为 `defects=-`。早于 body 解析就返回的错误（路径 404、body 超限、非法 JSON、GET 误访问）只有 `[错误] [ng]` 及原因，没有三个 id。
+
+```
+2026-11-23 11:38:28 [SERVICE] starting | config=D:\svc\config.json endpoint=http://127.0.0.1:9000/image_defect default_model=default device=None share_root=D:\svc\shared
+2026-11-23 11:38:28 [MODEL] loaded | alias=default path=None engine=mock conf=0.25
+2026-11-23 11:38:28 [WORKPIECE] A100 -> default
+2026-11-23 11:38:28 [SERVICE] started | pid=7800 log=D:\svc\log
+2026-11-23 11:38:28 [REQ] received | job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg mode=share_dir
+2026-11-23 11:38:28 [RESP] [成功] [ok] job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg workpiece=- models=default defects=QJ:1,HS:1 total=2 elapsed=156.1ms
+```
+
+日志只记录**文件名**：不记录图片内容（base64 不落盘）、不记录请求体大小与 `relative_dir`。
 
 ---
 

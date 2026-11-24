@@ -31,6 +31,9 @@ kConfigFileName = "config.json"
 kModelAliasPattern = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 kWorkpiecePattern = re.compile(r"^\S{1,64}$")
 kDefaultModelConf = 0.25
+kLogDirName = "log"
+kLogRetention = 30
+kLogFilePattern = re.compile(r"^\d{8}\.log$")
 
 kDefaultConfig = {
     "host": "127.0.0.1",
@@ -47,6 +50,9 @@ g_config = None
 g_models = {}
 g_defaultModel = None
 g_inferLock = threading.Lock()
+g_logLock = threading.Lock()
+g_logDay = None
+g_logErrorReported = False
 
 
 def makeError(errorCode, msg=None):
@@ -54,6 +60,47 @@ def makeError(errorCode, msg=None):
         "error_code": errorCode,
         "error_msg": kErrorMsg.get(errorCode, "unknown error") if msg is None else msg,
     }
+
+
+def logDir():
+    return os.path.join(os.getcwd(), kLogDirName)
+
+
+def pruneLogs():
+    directory = logDir()
+    try:
+        names = sorted(n for n in os.listdir(directory) if kLogFilePattern.match(n))
+    except OSError:
+        return
+    for name in names[: max(0, len(names) - kLogRetention)]:
+        try:
+            os.remove(os.path.join(directory, name))
+        except OSError:
+            pass
+
+
+def logLine(message):
+    """Append one timestamped line to log/YYYYMMDD.log, keep at most kLogRetention day files, and echo to stdout."""
+    global g_logDay, g_logErrorReported
+    day = time.strftime("%Y%m%d")
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}"
+    with g_logLock:
+        try:
+            print(line, flush=True)
+        except UnicodeEncodeError:
+            print(line.encode("ascii", "replace").decode("ascii"), flush=True)
+        try:
+            os.makedirs(logDir(), exist_ok=True)
+            with open(os.path.join(logDir(), f"{day}.log"), "a", encoding="utf-8", newline="\n") as f:
+                f.write(line + "\n")
+        except OSError as exc:
+            if not g_logErrorReported:
+                g_logErrorReported = True
+                print(f"[WARN] log file disabled: {exc}", flush=True)
+            return
+        if day != g_logDay:
+            g_logDay = day
+            pruneLogs()
 
 
 def readImageInfo(imageBytes):
@@ -235,6 +282,40 @@ def selectionSummary(fileNames):
     return f"workpiece={workpiece or '-'} models={aliases}"
 
 
+def defectCounts(results):
+    counts = {}
+    for item in results:
+        code = item.get("code", "?")
+        counts[code] = counts.get(code, 0) + 1
+    return ",".join(f"{code}:{count}" for code, count in counts.items()) or "-"
+
+
+def formatFileNames(fileNames):
+    names = [str(name) for name in fileNames] if isinstance(fileNames, list) else []
+    return ",".join(names) or "-"
+
+
+def logResponse(resp, req, elapsedMs):
+    jobInfo = req.get("job_id", "?") if isinstance(req, dict) else "?"
+    sampleInfo = req.get("sample_id", "?") if isinstance(req, dict) else "?"
+    poseInfo = req.get("pose_id", "") if isinstance(req, dict) else ""
+    fileNames = req.get("file_names") if isinstance(req, dict) else None
+    common = (
+        f"job_id={jobInfo} sample_id={sampleInfo} pose_id={poseInfo} files={formatFileNames(fileNames)} "
+        f"{selectionSummary(fileNames)}"
+    )
+    if resp["error_code"] == kOk:
+        results = (resp.get("data") or {}).get("results") or []
+        logLine(
+            f"[RESP] [成功] [ok] {common} defects={defectCounts(results)} total={len(results)} elapsed={elapsedMs}ms"
+        )
+    else:
+        logLine(
+            f"[RESP] [错误] [ng] {common} error_code={resp['error_code']} error_msg={resp['error_msg']} "
+            f"elapsed={elapsedMs}ms"
+        )
+
+
 def processRequest(req):
     startMs = time.perf_counter()
     errorCode = validateRequest(req)
@@ -278,16 +359,17 @@ class DefectHandler(BaseHTTPRequestHandler):
     timeout = kHandlerTimeoutSec
 
     def log_message(self, fmt, *args):
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {fmt % args}", flush=True)
+        """Drop BaseHTTPRequestHandler access lines; [REQ]/[RESP] already cover every request."""
 
     def do_GET(self):
+        logLine(f"[RESP] [错误] [ng] GET {self.path} rejected, use POST")
         self.sendJson(makeError(kInvalidParam, "use POST with a json body"), httpStatus=404)
 
     def do_POST(self):
         try:
             self.handleInfer()
         except Exception as exc:
-            print(f"[ERROR] unhandled exception: {exc}", flush=True)
+            logLine(f"[RESP] [错误] [ng] unhandled exception: {exc}")
             try:
                 self.sendJson(makeError(kSystemError))
             except Exception:
@@ -296,11 +378,13 @@ class DefectHandler(BaseHTTPRequestHandler):
     def handleInfer(self):
         pathOnly = self.path.split("?")[0].rstrip("/")
         if pathOnly != g_config.endpoint.rstrip("/"):
+            logLine(f"[RESP] [错误] [ng] unknown endpoint={self.path}")
             self.sendJson(makeError(kInvalidParam, f"unknown endpoint: {self.path}"),
                           httpStatus=404, extraHeaders={"Connection": "close"})
             return
         contentLength = int(self.headers.get("Content-Length") or 0)
         if contentLength <= 0 or contentLength > kMaxBodyBytes:
+            logLine(f"[RESP] [错误] [ng] invalid content length={contentLength}")
             self.sendJson(makeError(kInvalidParam, f"invalid content length: {contentLength}"),
                           extraHeaders={"Connection": "close"})
             return
@@ -308,18 +392,20 @@ class DefectHandler(BaseHTTPRequestHandler):
         try:
             req = json.loads(rawBody.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
+            logLine("[RESP] [错误] [ng] request body is not valid utf-8 json")
             self.sendJson(makeError(kInvalidParam, "request body is not valid utf-8 json"))
             return
-        resp, elapsedMs = processRequest(req)
         mode = "base64" if isinstance(req, dict) and "images_base64" in req else "share_dir"
         jobInfo = req.get("job_id", "?") if isinstance(req, dict) else "?"
+        sampleInfo = req.get("sample_id", "?") if isinstance(req, dict) else "?"
+        poseInfo = req.get("pose_id", "") if isinstance(req, dict) else ""
         fileNames = req.get("file_names") if isinstance(req, dict) else None
-        fileCount = len(fileNames or [])
-        print(
-            f"[REQ] job_id={jobInfo} {selectionSummary(fileNames)} files={fileCount} mode={mode} "
-            f"-> error_code={resp['error_code']} elapsed={elapsedMs}ms",
-            flush=True,
+        logLine(
+            f"[REQ] received | job_id={jobInfo} sample_id={sampleInfo} pose_id={poseInfo} "
+            f"files={formatFileNames(fileNames)} mode={mode}"
         )
+        resp, elapsedMs = processRequest(req)
+        logResponse(resp, req, elapsedMs)
         self.sendJson(resp, extraHeaders={"X-Process-Ms": str(elapsedMs)})
 
     def sendJson(self, payload, httpStatus=200, extraHeaders=None):
@@ -441,35 +527,44 @@ def loadConfig():
 def buildModels(config):
     models = {}
     for alias, entry in config.models.items():
-        if entry["path"] is None:
-            models[alias] = MockEngine(alias)
-        else:
-            models[alias] = YoloEngine(alias, entry["path"], config.device, entry["conf"])
+        kind = "mock" if entry["path"] is None else "yolo"
+        try:
+            if entry["path"] is None:
+                models[alias] = MockEngine(alias)
+            else:
+                models[alias] = YoloEngine(alias, entry["path"], config.device, entry["conf"])
+        except Exception as exc:
+            logLine(f"[MODEL] [错误] [ng] alias={alias} path={entry['path']} error={exc}")
+            raise
+        logLine(f"[MODEL] loaded | alias={alias} path={entry['path']} engine={kind} conf={entry['conf']}")
     return models
 
 
 def main():
     global g_config, g_models, g_defaultModel
-    g_config = loadConfig()
+    try:
+        g_config = loadConfig()
+    except SystemExit as exc:
+        logLine(f"[SERVICE] [错误] [ng] {exc}")
+        raise
+    logLine(
+        f"[SERVICE] starting | config={os.path.join(os.getcwd(), kConfigFileName)} "
+        f"endpoint=http://{g_config.host}:{g_config.port}{g_config.endpoint} "
+        f"default_model={g_config.default_model} device={g_config.device} "
+        f"share_root={os.path.abspath(g_config.share_root)}"
+    )
     g_defaultModel = g_config.default_model
     g_models = buildModels(g_config)
+    for workpiece, aliases in g_config.workpieces.items():
+        logLine(f"[WORKPIECE] {workpiece} -> {', '.join(aliases)}")
     os.makedirs(g_config.share_root, exist_ok=True)
     httpd = ThreadingHTTPServer((g_config.host, g_config.port), DefectHandler)
-    print("ShimadaPredictService started")
-    print(f"  config     : {os.path.join(os.getcwd(), kConfigFileName)}")
-    print(f"  endpoint   : http://{g_config.host}:{g_config.port}{g_config.endpoint}")
-    print(f"  default    : {g_defaultModel}")
-    for alias, entry in g_config.models.items():
-        kind = "mock" if entry["path"] is None else f"yolo({entry['path']})"
-        print(f"  model      : {alias} -> {kind} conf={entry['conf']}")
-    for workpiece, aliases in g_config.workpieces.items():
-        print(f"  workpiece  : {workpiece} -> {', '.join(aliases)}")
-    print(f"  share root : {os.path.abspath(g_config.share_root)}")
+    logLine(f"[SERVICE] started | pid={os.getpid()} log={logDir()}")
     print("Press Ctrl+C to stop.", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nService stopped.")
+        logLine("[SERVICE] stopped")
     finally:
         httpd.server_close()
 

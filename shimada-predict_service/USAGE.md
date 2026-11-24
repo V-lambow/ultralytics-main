@@ -36,22 +36,19 @@ python server.py
 
 服务端**不接收任何命令行参数**，启动时只读当前工作目录下的 `config.json`，所以必须在 `shimada-predict_service` 目录内执行（或把 `config.json` 放到你的工作目录）。仓库自带的 `config.json` 是 mock 模式，不装模型即可跑通。
 
-启动输出：
+启动输出（同时写入 `log/YYYYMMDD.log`）：
 
 ```
-ShimadaPredictService started
-  config     : D:\m_code\dzy\ultralytics-main\shimada-predict_service\config.json
-  endpoint   : http://127.0.0.1:9000/image_defect
-  default    : default
-  model      : default -> mock conf=0.25
-  workpiece  : A100 -> default
-  share root : D:\m_code\dzy\ultralytics-main\shimada-predict_service\shared
+2026-11-23 11:38:28 [SERVICE] starting | config=D:\...\shimada-predict_service\config.json endpoint=http://127.0.0.1:9000/image_defect default_model=default device=None share_root=D:\...\shimada-predict_service\shared
+2026-11-23 11:38:28 [MODEL] loaded | alias=default path=None engine=mock conf=0.25
+2026-11-23 11:38:28 [WORKPIECE] A100 -> default
+2026-11-23 11:38:28 [SERVICE] started | pid=7800 log=D:\...\shimada-predict_service\log
 Press Ctrl+C to stop.
 ```
 
-每个模型一行：`别名 -> mock` 或 `别名 -> yolo(权重路径)`；每个型号再一行 `workpiece : 型号 -> 别名, 别名`。配置多个模型时这里会列出全部。
+每个别名一行 `[MODEL] loaded`：`engine=mock`（`path` 为 `null`）或 `engine=yolo` + 权重路径；每个型号再一行 `[WORKPIECE] 型号 -> 别名, 别名`。配置多个模型时这里会列出全部。
 
-配置有问题（文件缺失、键名拼错、类型/范围不对）会打印具体原因并以退出码 1 结束，**不会打开端口**，客户端这时只会看到 `connection failed`。
+配置有问题（文件缺失、键名拼错、类型/范围不对）会写一行 `[SERVICE] [错误] [ng] <原因>` 并以退出码 1 结束，**不会打开端口**，客户端这时只会看到 `connection failed`。
 
 **终端 2 — 客户端测试：**
 
@@ -251,17 +248,44 @@ python server.py
 - `area/length/volume` 目前是**框的占位值**（框面积/框长边），接入真实测量逻辑见 README §6。
 - 无检出时 `results: []`，`error_code` 仍为 0 —— 这是正常业务结果。
 
-## 7. 错误码
+## 7. 运行日志
+
+服务端把启动、模型加载、每个请求与响应都写到**工作目录下的 `log/`**，控制台同步打印一份。
+
+| 项 | 规则 |
+|---|---|
+| 文件命名 | `log/YYYYMMDD.log`，按写入当天切换（跨天自动新建，无需重启） |
+| 数量上限 | 最多 30 个日期文件（`kLogRetention`）；跨天首次写入时删最旧的，同一天内重启不清理 |
+| 编码 | UTF-8、LF，一行一条，行首为 `YYYY-MM-DD HH:MM:SS` |
+| 并发 | 全局锁串行写入，多请求并发不会写乱行 |
+| 目录不可写 | 只打印一次 `[WARN] log file disabled`，服务照常推理，只是不落文件 |
+
+一次正常请求在日志里是 `[REQ]` + `[RESP]` 两行：
+
+```
+2026-11-23 11:38:28 [REQ] received | job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg mode=share_dir
+2026-11-23 11:38:28 [RESP] [成功] [ok] job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg workpiece=- models=default defects=QJ:1,HS:1 total=2 elapsed=156.1ms
+```
+
+- `[成功] [ok]` 表示 `error_code=0`（`total=0` 也算成功，即无缺陷）；`[错误] [ng]` 表示任意非 0 错误码，后面跟 `error_code` / `error_msg`。
+- `defects=CODE:数量,...` 是该次响应中各缺陷代码的条数，`total` 是总条数，无缺陷时为 `defects=-`。
+- `workpiece` / `models` 是实际路由结果：解析规则未实现期间固定为 `workpiece=- models=<default_model>`；接入 `parseWorkpiece` 后显示解析出的型号及其全部别名。
+- 启动阶段另有 `[SERVICE]`（启动/停止/配置错误）、`[MODEL]`（每个别名的 `path`）、`[WORKPIECE]`（配对表）几类行。
+- 只记录文件名，不记录图片内容、base64 或 `relative_dir`。
+
+排查建议：拿 `job_id` 去当天文件里搜；日志里的 `elapsed` 与响应头 `X-Process-Ms` 同源（都是服务端处理耗时，不含网络）。
+
+## 8. 错误码
 
 | error_code | error_msg | 含义 / 常见原因 |
 |---|---|---|
 | 0 | `OK` | 推理成功（`results` 可为空 = 无缺陷） |
-| -1001 | 系统错误：未知错误 | 服务端内部异常，看服务端控制台 `[ERROR]` 日志 |
+| -1001 | 系统错误：未知错误 | 服务端内部异常，看 `log/` 当天文件里的 `[RESP] [错误]` 行 |
 | -1002 | 参数错误：参数不合法 | JSON 非法、缺 job_id/sample_id/file_names、数组长度不匹配、两种传图方式并存或都缺失、**文件名解析出的型号不在 `workpieces` 中（error_msg 为 `unknown workpiece: xxx`）** |
 | -1003 | 参数错误：图片名称错误 | 文件名空白、含非法字符（白名单：字母数字下划线点空格横线）、扩展名不在 jpg/jpeg/png/bmp/tif/tiff、relative_dir 越界 |
 | -1004 | 参数错误：图片数据不存在 | base64 解码失败/为空、图片字节无法解码、共享盘文件不存在或不可读 |
 
-## 8. C# 对接参考
+## 9. C# 对接参考
 
 协议文档中的 C# 示例为对接视角。与 JSON 协议对应的两种发法：
 
@@ -305,11 +329,11 @@ var payload = new
 
 注意：文档中出现的 `Data-Header + application/octet-stream` 二进制方案是历史残留示例，**本服务实现的是 JSON 报文方案**（协议第 1、2 节明确"请求和响应内容均在 JSON 消息体中"）。如对接方确有二进制头需求，需另行扩展服务端。
 
-## 9. 常见问题（FAQ）
+## 10. 常见问题（FAQ）
 
 | 现象 | 原因与处理 |
 |---|---|
-| `connection failed: ...` | 服务未启动 / 地址端口不对 / 防火墙拦截。先确认服务端控制台有没有打印 `ShimadaPredictService started`（配置不合法会在启动阶段直接退出），再用 `python client.py test-errors` 快速排查 |
+| `connection failed: ...` | 服务未启动 / 地址端口不对 / 防火墙拦截。先确认服务端控制台有没有打印 `[SERVICE] started`（带 pid，配置不合法会在启动阶段直接退出，原因也写进 `log/`），再用 `python client.py test-errors` 快速排查 |
 | 中文文件名能不能用 | 可以：白名单正则的 `\w` 在 Python 3 下包含中文，`中文名.jpg` 实测能通过；只需保证请求 body 是 UTF-8。仍建议用 ASCII 命名，避免对接方编码差异 |
 | 端口被占用 | `OSError: [WinError 10048]` → 改 `config.json` 的 `port` 或释放 9000 端口 |
 | 响应 404 + `-1002` unknown endpoint | URL 路径与 `config.json` 的 `endpoint` 不一致 |
@@ -323,10 +347,12 @@ var payload = new
 | 响应 `unknown workpiece: xxx` | 文件名解析出的型号不在 `workpieces` 表里。解析规则定下后才可能出现；补配对项或让解析函数回退 `None` |
 | 改了 `models` / `workpieces` 但没生效 | 配置只在启动时读一次，必须重启 `python server.py`；新增模型、改配对同样要重启 |
 | 大图请求被拒 -1002 invalid content length | 请求体超过 256MB 上限（`kMaxBodyBytes`），请压缩图片或调整上限 |
-| 想看每次请求耗时 | 看服务端 `[REQ] ... elapsed=...ms` 日志，或响应头 `X-Process-Ms` |
+| 想看每次请求耗时 | 看 `log/YYYYMMDD.log` 里 `[RESP] ... elapsed=...ms`，或响应头 `X-Process-Ms` |
+| 日志在哪、能留多久 | 工作目录下 `log/`，按天一个文件，最多 30 个（见 §7）；同一天重启会续写同一个文件 |
+| 磁盘满了 / 不想写日志 | 删旧文件即可（运行中删除安全）；目录设为只读只会告警一次，服务不中断 |
 | 停止服务 | 服务端控制台 `Ctrl+C` |
 
-## 10. 文件清单
+## 11. 文件清单
 
 | 文件 | 说明 |
 |---|---|
@@ -338,4 +364,5 @@ var payload = new
 | `README.md` | 完整代码逻辑说明 |
 | `USAGE.md` | 本手册 |
 | `shared/` | 服务端共享盘根目录（运行时生成） |
+| `log/` | 运行日志目录（运行时生成，`YYYYMMDD.log`，最多 30 个文件） |
 | `test_images/` | 客户端测试图输出目录（运行时生成） |
