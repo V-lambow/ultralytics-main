@@ -250,6 +250,8 @@ results 条目：
 | 并发与排队 | 每连接一个线程，多连接可同时到达；但推理由 `g_inferLock` 串行 → 响应耗时 ≈ 前面积压请求的推理时间之和 + 本次推理时间；客户端超时必须覆盖排队时间 |
 | 超时分工 | 客户端 timeout（C# `inspectTimeout`）覆盖"发送+排队+推理+响应"全程；服务端 socket 300s 超时用于踢掉挂死连接；两边应满足：客户端 timeout > 服务端最坏处理耗时 |
 | 请求体上限 | 256MB（`kMaxBodyBytes`）；base64 体积膨胀约 4/3，即原始图约 ≤ 190MB；超限直接拒为 -1002 不读 body |
+| 单图上限 | 单张 ≤ 128MB（`kMaxImageBytes`，覆盖 4800×4800×32bpp ≈ 88MB）且解码后 ≤ 3000 万像素（`kMaxImagePixels`）；超限 -1004，不进入推理 |
+| 并发上限 | 同时处理 ≤ 8 个请求（`kMaxInflight`），超出立即返回 -1001 系统繁忙，不排队堆积内存 |
 | 多图语义 | 逐张装图、逐张推理，结果按请求顺序合并进 `results`；**任一张失败则整个请求失败**，无部分成功 |
 | 模型选择 | 请求**不带**模型字段：`parseWorkpiece(file_names[0])` 得到型号 → 查 `workpieces` 表得到别名数组 → 按顺序逐张图、逐个模型推理并合并 `results`。解析规则未定期间 `parseWorkpiece` 返回 `None`，回落 `default_model` 单模型；型号存在但表里没有 → -1002 且不消耗装图/推理；日志 `[REQ] ... workpiece=... models=...` 记录实际选择 |
 | 共享盘时序前置 | 必须先把图片**写完盘**（文件句柄已关闭）再发 POST；服务端收到请求即刻读取，不等待、不轮询、不重试；写盘与发请求之间无确认机制，由文件系统保证 |
@@ -267,6 +269,7 @@ results 条目：
 | JSON / UTF-8 非法 | 200 + -1002 | `error_code=-1002` | 检查序列化（勿手动拼 JSON 字符串） |
 | 图片数据问题 | 200 + -1004 | `error_code=-1004` | base64：核对编码与完整性；共享盘：核对服务端 `share_root` 与落盘完成状态 |
 | 推理异常 | 200 + -1001，日志 `[RESP] [错误]` | `error_code=-1001` | 看 `log/` 日志定位（模型缺失、显存不足等） |
+| 并发过载 | 闸门满直接回 -1001，不进入装图/推理 | `error_code=-1001`（`error_msg` 为系统繁忙） | 客户端退避重试或降低并发 |
 | 服务端被 Ctrl+C | 监听关闭，在途请求响应丢失 | connection failed / 中断 | 客户端重试；产线建议由进程管理器守护 |
 
 ---
@@ -284,6 +287,7 @@ shimada-predict_service/
 │   ├── response_success.json   # 响应：error_code = 0
 │   └── response_failure.json   # 响应：error_code ≠ 0
 ├── requirements.txt # 依赖清单
+├── tests/           # pytest 用例（校验/装图/配置/路由/日志，不依赖模型与网络）
 ├── README.md        # 本文档：完整代码逻辑
 ├── USAGE.md         # 使用手册
 ├── shared/          # 服务端共享盘根目录（启动时自动创建，share_root 可改）
@@ -327,6 +331,8 @@ shimada-predict_service/
 | `kOk / kSystemError / kInvalidParam / kInvalidImageName / kImageNotFound` | 协议错误码常量（k 前缀） |
 | `kErrorMsg` | 错误码 → 错误文案映射，与协议表一致 |
 | `kMaxBodyBytes` = 256 MB | 请求体上限，防止恶意超大包 |
+| `kMaxImageBytes` = 128 MB / `kMaxImagePixels` = 3000 万 | 单张图上限：字节数（覆盖 4800×4800×32bpp ≈ 88 MB）与解码后像素数（覆盖 4800×4800 ≈ 2304 万，留 ~30% 余量） |
+| `kMaxInflight` = 8 / `kBusyMsg` | 同时进入处理流程的请求数上限；满了立即回 `-1001` 系统繁忙，避免线程/内存雪崩 |
 | `kImageNamePattern` | 文件名白名单正则：`^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$`（忽略大小写）。字符集内不含 `/`、`\`，天然阻断文件名携带路径 |
 | `kHandlerTimeoutSec` = 300 | Handler 的 socket 超时，防慢客户端占死线程 |
 | `kModelAliasPattern` | 模型别名白名单：`^[A-Za-z0-9_.-]{1,64}$`，因别名会进日志与配置引用，禁止中文/空格/引号 |
@@ -336,11 +342,12 @@ shimada-predict_service/
 | `kLogFilePattern` | 日志文件名正则 `^\d{8}\.log$`，只有按日期命名的文件参与保留计数与清理 |
 | `makeError(code, msg=None)` | 构造 `{"error_code":..., "error_msg":...}`；msg 缺省时查 `kErrorMsg` |
 | `logLine(message)` | 统一日志出口：加时间戳后打印到控制台并追加到 `log/YYYYMMDD.log`；跨天首次写入时清理旧文件 |
-| `readImageInfo(bytes)` | 用 PIL 从内存图片读取 `(width, height)`；PIL 缺失、解码失败均返回 `None`（后续映射为 -1004） |
+| `decodeImage(bytes)` | **唯一解码入口**：优先 `cv2.imdecode` 一次解出 BGR ndarray + 宽高；cv2 不可用或解不开时回退 PIL 只读尺寸（mock 专用部署），都失败返回 `None` |
+| `readImageInfo(bytes)` | 用 PIL 从内存图片读取 `(width, height)`，仅作 `decodeImage` 的回退路径 |
 
 ### 4.2 推理引擎
 
-两者实现同一签名 `predict(imageBytes, fileName, imageWidth, imageHeight) -> list[dict]`，输出即协议 `results[]` 条目（不含 `file_name`，由调用方补充）。两者在构造时都记录 `self.alias`（即 `config.json` 里的别名），因此引擎句柄本身就携带别名，`g_models[handle.alias]` 与 `handle.alias` 始终一致。
+两者实现同一签名 `predict(pixels, fileName, imageWidth, imageHeight) -> list[dict]`，输出即协议 `results[]` 条目（不含 `file_name`，由调用方补充）。`pixels` 是 `loadImages` 用 `decodeImage` **一次性**解出的 BGR ndarray（mock 专用部署下可能是 `None`，MockEngine 忽略它）。两者在构造时都记录 `self.alias`（即 `config.json` 里的别名），因此引擎句柄本身就携带别名，`g_models[handle.alias]` 与 `handle.alias` 始终一致。
 
 **MockEngine（`path` 为 null 的别名）**
 
@@ -352,7 +359,8 @@ shimada-predict_service/
 **YoloEngine（`path` 非 null 的别名）**
 
 - 构造：`YoloEngine(alias, modelPath, device, conf)` —— `from ultralytics import YOLO` 并加载权重（延迟导入，纯 mock 部署无需安装 ultralytics）。`device` 统一来自顶层配置，`conf` 可按模型覆盖。
-- `predict` 中 `cv2.imdecode(np.frombuffer(bytes), IMREAD_COLOR)` 将请求体图片字节解码为 BGR ndarray，交给 `model.predict(img, device, conf, verbose=False)`。
+- 构造完成后立即 `warmup()`：用一张 640×640 黑图跑一次 `model.predict`，把权重初始化/编译/显存分配的成本挪到启动阶段；warmup 失败（CUDA OOM、权重损坏）直接退出，不会拖到第一个真实请求才报 `-1001`。
+- `predict` 直接使用 `loadImages` 解好的 BGR ndarray（不再自己解码），只做 `model.predict(pixels, device, conf, verbose=False)`。
 - 字段映射：
 
 | 协议字段 | 来源 |
@@ -375,15 +383,18 @@ do_POST
        ├─ 路径校验     path != endpoint   → 404 + -1002
        ├─ 长度校验     Content-Length ≤0 或 >256MB → -1002
        ├─ JSON 解析   非法 UTF-8/JSON     → -1002
+       ├─ 并发闸门     g_inferSlots 已满  → -1001 系统繁忙
        └─ processRequest
             ├─ validateRequest                # 结构校验 → -1002 / -1003
             ├─ parseWorkpiece + 查 workpieces # 型号 → 引擎句柄[] → -1002
-            ├─ loadImages                     # 装图 → -1003 / -1004
+            ├─ loadImages                     # 装图+一次解码 → -1003 / -1004
             ├─ for 每张图: for 每个 handle: g_inferLock + handle.predict
             │    └─ 缺陷条目补 "file_name"
             └─ 组装 data（严格按协议字段）→ {"error_code":0, "error_msg":"OK", "data":{...}}
   响应头额外带 X-Process-Ms（服务端处理耗时，仅诊断用）
 ```
+
+`g_inferSlots`（`threading.BoundedSemaphore(kMaxInflight)`）在解析完 body 后**非阻塞**获取：拿到才进入 `processRequest`，`finally` 里释放；拿不到立即返回 `-1001` + `系统繁忙：并发请求过多，请稍后重试`。它限制的是"同时处理中"的请求数（解码图 + 排队等 `g_inferLock`），防止请求洪峰把线程和内存拖垮；推理本身仍由 `g_inferLock` 串行。
 
 `validateRequest` 校验规则（按序短路）：
 
@@ -401,10 +412,11 @@ do_POST
 
 `loadImages` 装图规则：
 
-- **base64 模式**：`base64.b64decode` 逐张解码；`binascii.Error / ValueError / 空数据` → -1004。
+- **base64 模式**：`base64.b64decode(..., validate=True)` 逐张解码——**非法字符直接报错**，不再被静默丢弃；`binascii.Error / ValueError / 空数据` → -1004。
 - **共享盘模式**：`fullPath = abspath(join(shareRoot, relative_dir, fileName))`，用 `os.path.commonpath([shareRoot, fullPath])` 做**路径穿越防护**——`relative_dir` 含 `..` 逃出共享根时返回 -1003；文件不存在或读取 OSError → -1004。
-- 装图后统一用 `readImageInfo` 试解码读尺寸；任何一张解不开（坏图、假扩展名）→ -1004。
-- 成功返回 `[(fileName, bytes, width, height), ...]`。
+- **单图上限**：解码前先查字节数（`kMaxImageBytes` = 128MB），共享盘模式用 `os.path.getsize` 免读；解码后再查像素数（`kMaxImagePixels` = 3000 万）。超限 → -1004，并写 `[IMG]` 日志说明原因。
+- 解码统一走 `decodeImage`：**一张图只解一次**（cv2 优先，PIL 仅作无 cv2 时的尺寸回退）；解不开（坏图、假扩展名）→ -1004。
+- 成功返回 `[(fileName, pixels, width, height), ...]`，`pixels` 已就绪，推理循环里不再解码。
 
 ### 4.4 HTTP 层细节
 
@@ -419,7 +431,7 @@ do_POST
 1. `loadConfig` 从**工作目录**读取 `config.json`（`os.getcwd()`），用 `kDefaultConfig` 补齐缺省键，校验未知键与各字段类型/范围；任一项不合法即打印原因并以退出码 1 结束，**端口不会被打开**。
 2. `loadModels` 逐个校验 `models`：别名需匹配 `^[A-Za-z0-9_.-]{1,64}$`、条目只允许 `path`/`conf` 两个键、`path` 为 `null`（mock）或非空字符串、`conf` ∈ [0, 1]（缺省 0.25）；`default_model` 缺省时仅在**只有一个模型**时自动取它，多个模型必须显式指定。
 3. `loadWorkpieces` 校验 `workpieces`：键匹配 `^\S{1,64}$`、值是非空数组、数组元素必须是 `models` 里已存在的别名且同一型号内不重复；空表 `{}` 合法。
-4. `buildModels` 按别名构建引擎：`path` 为 `null` → `MockEngine(alias)`，否则 `YoloEngine(alias, path, device, conf)`（此时才 import ultralytics 并加载权重，fail-fast）。配对表不参与这一步，所有别名一律加载。
+4. `buildModels` 按别名构建引擎：`path` 为 `null` → `MockEngine(alias)`，否则 `YoloEngine(alias, path, device, conf)`（此时才 import ultralytics 并加载权重，fail-fast）。yolo 模型紧接着 `warmup()` 跑一张 640×640 黑图，把首次推理开销（权重初始化/编译/显存分配）压到启动阶段；warmup 失败同样以退出码 1 结束。配对表不参与这一步，所有别名一律加载。
 5. `os.makedirs(share_root, exist_ok=True)` 保证共享根存在。
 6. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，通过 `logLine` 输出 config / endpoint / default / 每个 model / 每个 workpiece / share root（见 §4.7）。
 7. `serve_forever()`；`Ctrl+C` 优雅退出（`server_close()`）。
@@ -468,25 +480,29 @@ def resolveHandles(fileNames):
 - **保留策略**：`kLogRetention = 30`，只统计匹配 `^\d{8}\.log$` 的文件；跨天首次写入时按文件名排序删除最旧的，直到剩 30 个（含当天）。同一天内重启不会触发清理，也不会新建文件。
 - 并发安全：`g_logLock` 串行化"打印 + 写文件 + 清理"，多线程并发请求不会写出交错的行。
 
-日志内容分五类，`[REQ]` / `[RESP]` 每个请求各一行：
+日志内容分六类，`[REQ]` / `[RESP]` 每个请求各一行：
 
 | 标签 | 触发时机 | 字段 |
 |---|---|---|
 | `[SERVICE]` | 启动、停止、配置非法 | `starting`（config / endpoint / default_model / device / share_root）、`started`（pid / log 目录）、`[错误] [ng]` + 退出原因、`stopped` |
-| `[MODEL]` | 每个别名构建完成时 | `loaded`：alias / path / engine=mock 或 yolo / conf；失败为 `[错误] [ng]` + alias / path / error |
+| `[MODEL]` | 每个别名构建完成、warmup 完成时 | `loaded`：alias / path / engine=mock 或 yolo / conf；`warmup`：alias / elapsed；失败为 `[错误] [ng]` + alias / path / error |
 | `[WORKPIECE]` | 启动时每个配对项一行 | `型号 -> 别名1, 别名2` |
+| `[IMG]` | 单图被拒时 | `[错误] [ng]` + file / 原因（invalid base64、bytes 超限、pixels 超限、decode failed） |
 | `[REQ]` | body 解析成功、推理之前 | `received`：job_id / sample_id / pose_id / files / mode=base64 或 share_dir |
 | `[RESP]` | 每个响应发出之前 | `[成功] [ok]`：三个 id / files / workpiece / models / defects=CODE:数量,... / total / elapsed；失败为 `[错误] [ng]` + error_code / error_msg / elapsed |
 
-`[RESP]` 里的 `workpiece` / `models` 来自 `resolveHandles` 的实际路由结果（回落时是 `workpiece=- models=<default_model>`），`defects` 按 `code` 聚合计数，无缺陷时为 `defects=-`。早于 body 解析就返回的错误（路径 404、body 超限、非法 JSON、GET 误访问）只有 `[错误] [ng]` 及原因，没有三个 id。
+`[RESP]` 里的 `workpiece` / `models` 来自 `resolveHandles` 的实际路由结果（回落时是 `workpiece=- models=<default_model>`），`defects` 按 `code` 聚合计数，无缺陷时为 `defects=-`。早于 body 解析就返回的错误（路径 404、body 超限、非法 JSON、GET 误访问）只有 `[错误] [ng]` 及原因，没有三个 id；并发闸门拒绝的请求带完整三个 id，`error_msg` 为系统繁忙。
 
 ```
-2026-11-23 11:38:28 [SERVICE] starting | config=D:\svc\config.json endpoint=http://127.0.0.1:9000/image_defect default_model=default device=None share_root=D:\svc\shared
-2026-11-23 11:38:28 [MODEL] loaded | alias=default path=None engine=mock conf=0.25
-2026-11-23 11:38:28 [WORKPIECE] A100 -> default
-2026-11-23 11:38:28 [SERVICE] started | pid=7800 log=D:\svc\log
-2026-11-23 11:38:28 [REQ] received | job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg mode=share_dir
-2026-11-23 11:38:28 [RESP] [成功] [ok] job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg workpiece=- models=default defects=QJ:1,HS:1 total=2 elapsed=156.1ms
+2026-11-23 11:38:28 [SERVICE] starting | config=D:\svc\config.json endpoint=http://127.0.0.1:9000/image_defect default_model=fd_v3 device=None share_root=D:\svc\shared
+2026-11-23 11:38:28 [MODEL] loaded | alias=fd_v3 path=D:\svc\models\fd_v3.pt engine=yolo conf=0.35
+2026-11-23 11:38:29 [MODEL] warmup | alias=fd_v3 elapsed=1820.4ms
+2026-11-23 11:38:29 [WORKPIECE] A100 -> fd_v3
+2026-11-23 11:38:29 [SERVICE] started | pid=7800 log=D:\svc\log
+2026-11-23 11:38:30 [REQ] received | job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg mode=share_dir
+2026-11-23 11:38:30 [RESP] [成功] [ok] job_id=J20261123113828838 sample_id=S00001 pose_id=P01 files=S00001_C01_P01_L0_20261123113828.jpg workpiece=- models=fd_v3 defects=QJ:1,HS:1 total=2 elapsed=156.1ms
+2026-11-23 11:39:02 [IMG] [错误] [ng] file=huge.jpg bytes=134217729 limit=134217728
+2026-11-23 11:39:02 [RESP] [错误] [ng] job_id=J20261123113902 sample_id=S00001 pose_id=P01 files=huge.jpg workpiece=- models=fd_v3 error_code=-1004 error_msg=参数错误：图片数据不存在 elapsed=0.1ms
 ```
 
 日志只记录**文件名**：不记录图片内容（base64 不落盘）、不记录请求体大小与 `relative_dir`。

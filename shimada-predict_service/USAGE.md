@@ -66,6 +66,9 @@ python client.py gen-images --count 2 --out test_images
 
 # ④ 用刚生成的图走 base64 方式
 python client.py send-base64 --images test_images\S00001_C01_P01_L0_XXXXXXXXXXXXXX.jpg
+
+# ⑤ 服务端逻辑单测（校验/装图/配置/路由/日志，不需要模型和网络）
+python -m pytest tests -q
 ```
 
 请求里不含 `model` / `workpiece` 字段：服务端按文件名解析型号（规则未定，见 §4.1 的 `workpieces`），再查配对表决定跑哪些模型。
@@ -270,7 +273,8 @@ python server.py
 - `[成功] [ok]` 表示 `error_code=0`（`total=0` 也算成功，即无缺陷）；`[错误] [ng]` 表示任意非 0 错误码，后面跟 `error_code` / `error_msg`。
 - `defects=CODE:数量,...` 是该次响应中各缺陷代码的条数，`total` 是总条数，无缺陷时为 `defects=-`。
 - `workpiece` / `models` 是实际路由结果：解析规则未实现期间固定为 `workpiece=- models=<default_model>`；接入 `parseWorkpiece` 后显示解析出的型号及其全部别名。
-- 启动阶段另有 `[SERVICE]`（启动/停止/配置错误）、`[MODEL]`（每个别名的 `path`）、`[WORKPIECE]`（配对表）几类行。
+- 启动阶段另有 `[SERVICE]`（启动/停止/配置错误）、`[MODEL]`（每个别名的 `path`，yolo 模型还有一行 `warmup`）、`[WORKPIECE]`（配对表）、`[IMG]`（某张图被拒的原因：base64 非法、超字节/像素上限、解不开）几类行。
+- 请求过多时闸门会直接拒绝（`-1001`，`error_msg` 为"系统繁忙：并发请求过多，请稍后重试"），日志同样有 `[REQ]` / `[RESP]` 两行，可据此判断是过载而不是代码错误。
 - 只记录文件名，不记录图片内容、base64 或 `relative_dir`。
 
 排查建议：拿 `job_id` 去当天文件里搜；日志里的 `elapsed` 与响应头 `X-Process-Ms` 同源（都是服务端处理耗时，不含网络）。
@@ -280,10 +284,10 @@ python server.py
 | error_code | error_msg | 含义 / 常见原因 |
 |---|---|---|
 | 0 | `OK` | 推理成功（`results` 可为空 = 无缺陷） |
-| -1001 | 系统错误：未知错误 | 服务端内部异常，看 `log/` 当天文件里的 `[RESP] [错误]` 行 |
+| -1001 | 系统错误：未知错误 | 服务端内部异常，看 `log/` 当天文件里的 `[RESP] [错误]` 行；**并发超过 8 个时也会返回 -1001，`error_msg` 为"系统繁忙：并发请求过多，请稍后重试"** |
 | -1002 | 参数错误：参数不合法 | JSON 非法、缺 job_id/sample_id/file_names、数组长度不匹配、两种传图方式并存或都缺失、**文件名解析出的型号不在 `workpieces` 中（error_msg 为 `unknown workpiece: xxx`）** |
 | -1003 | 参数错误：图片名称错误 | 文件名空白、含非法字符（白名单：字母数字下划线点空格横线）、扩展名不在 jpg/jpeg/png/bmp/tif/tiff、relative_dir 越界 |
-| -1004 | 参数错误：图片数据不存在 | base64 解码失败/为空、图片字节无法解码、共享盘文件不存在或不可读 |
+| -1004 | 参数错误：图片数据不存在 | base64 含非法字符/解码失败/为空、单图超过 128MB 或解码后超过 3000 万像素、图片字节无法解码、共享盘文件不存在或不可读 |
 
 ## 9. C# 对接参考
 
@@ -347,6 +351,9 @@ var payload = new
 | 响应 `unknown workpiece: xxx` | 文件名解析出的型号不在 `workpieces` 表里。解析规则定下后才可能出现；补配对项或让解析函数回退 `None` |
 | 改了 `models` / `workpieces` 但没生效 | 配置只在启动时读一次，必须重启 `python server.py`；新增模型、改配对同样要重启 |
 | 大图请求被拒 -1002 invalid content length | 请求体超过 256MB 上限（`kMaxBodyBytes`），请压缩图片或调整上限 |
+| 响应 -1001 `系统繁忙：并发请求过多` | 同时处理中的请求超过 8 个（`kMaxInflight`），服务端直接拒绝而不是排队；降低客户端并发、加重试退避，或按机器内存调大该常量 |
+| 响应 -1004 但图片看起来正常 | 单图超过 128MB（`kMaxImageBytes`）或解码后超过 3000 万像素（`kMaxImagePixels`）；看日志里的 `[IMG]` 行确认是 bytes 还是 pixels 超限 |
+| 改了代码但行为没变 | Windows 上两个实例可能同时占用 9000（`SO_REUSEADDR`），先确认没有残留 `python.exe` 再启动 |
 | 想看每次请求耗时 | 看 `log/YYYYMMDD.log` 里 `[RESP] ... elapsed=...ms`，或响应头 `X-Process-Ms` |
 | 日志在哪、能留多久 | 工作目录下 `log/`，按天一个文件，最多 30 个（见 §7）；同一天重启会续写同一个文件 |
 | 磁盘满了 / 不想写日志 | 删旧文件即可（运行中删除安全）；目录设为只读只会告警一次，服务不中断 |
@@ -361,6 +368,7 @@ var payload = new
 | `config.json` | 服务端唯一配置（工作目录下读取；含 `models` 别名表 + `workpieces` 配对表 + `default_model`，无命令行参数） |
 | `examples/` | 报文示例：`request_base64.json`、`request_share_dir.json`、`response_success.json`、`response_failure.json`（仅对照用，运行时不读取） |
 | `requirements.txt` | 依赖：`pillow`（必装）、`ultralytics`（可选） |
+| `tests/` | pytest 用例：请求校验、装图与大小限制、配置校验、型号路由、日志保留 |
 | `README.md` | 完整代码逻辑说明 |
 | `USAGE.md` | 本手册 |
 | `shared/` | 服务端共享盘根目录（运行时生成） |

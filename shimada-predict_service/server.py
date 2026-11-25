@@ -25,6 +25,10 @@ kErrorMsg = {
 }
 
 kMaxBodyBytes = 256 * 1024 * 1024
+kMaxImageBytes = 128 * 1024 * 1024
+kMaxImagePixels = 30_000_000
+kMaxInflight = 8
+kBusyMsg = "系统繁忙：并发请求过多，请稍后重试"
 kImageNamePattern = re.compile(r"^[\w\-. ]+\.(jpg|jpeg|png|bmp|tif|tiff)$", re.IGNORECASE)
 kHandlerTimeoutSec = 300
 kConfigFileName = "config.json"
@@ -50,6 +54,7 @@ g_config = None
 g_models = {}
 g_defaultModel = None
 g_inferLock = threading.Lock()
+g_inferSlots = threading.BoundedSemaphore(kMaxInflight)
 g_logLock = threading.Lock()
 g_logDay = None
 g_logErrorReported = False
@@ -115,13 +120,29 @@ def readImageInfo(imageBytes):
         return None
 
 
+def decodeImage(imageBytes):
+    """Decode image bytes once to (bgr, width, height); bgr is None when only PIL is available."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        cv2 = None
+    if cv2 is not None:
+        img = cv2.imdecode(np.frombuffer(imageBytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if img is not None:
+            height, width = img.shape[:2]
+            return img, int(width), int(height)
+    size = readImageInfo(imageBytes)
+    return None if size is None else (None, size[0], size[1])
+
+
 class MockEngine:
     kDefectCodes = ["ZM", "HS", "QJ", "WS"]
 
     def __init__(self, alias):
         self.alias = alias
 
-    def predict(self, imageBytes, fileName, imageWidth, imageHeight):
+    def predict(self, pixels, fileName, imageWidth, imageHeight):
         seed = int(hashlib.md5(fileName.encode("utf-8")).hexdigest()[:8], 16)
         rng = random.Random(seed)
         defects = []
@@ -152,13 +173,8 @@ class YoloEngine:
         self.device = device
         self.conf = conf
 
-    def predict(self, imageBytes, fileName, imageWidth, imageHeight):
-        import cv2
-        import numpy as np
-        img = cv2.imdecode(np.frombuffer(imageBytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            return []
-        result = self.model.predict(img, device=self.device, conf=self.conf, verbose=False)[0]
+    def predict(self, pixels, fileName, imageWidth, imageHeight):
+        result = self.model.predict(pixels, device=self.device, conf=self.conf, verbose=False)[0]
         defects = []
         boxes = result.boxes
         for i in range(len(boxes)):
@@ -177,6 +193,11 @@ class YoloEngine:
                 "defect_raw": [],
             })
         return defects
+
+    def warmup(self):
+        """Run one dummy inference so the first real request does not pay lazy init/compile cost."""
+        import numpy as np
+        self.predict(np.zeros((640, 640, 3), dtype=np.uint8), "warmup.jpg", 640, 640)
 
 
 def validateRequest(req):
@@ -218,10 +239,15 @@ def loadImages(req):
     if "images_base64" in req:
         for name, b64Data in zip(fileNames, req["images_base64"]):
             try:
-                data = base64.b64decode(b64Data)
+                data = base64.b64decode(b64Data, validate=True)
             except (binascii.Error, ValueError):
+                logLine(f"[IMG] [错误] [ng] file={name} reason=invalid base64")
                 return None, kImageNotFound
             if not data:
+                logLine(f"[IMG] [错误] [ng] file={name} reason=empty image data")
+                return None, kImageNotFound
+            if len(data) > kMaxImageBytes:
+                logLine(f"[IMG] [错误] [ng] file={name} bytes={len(data)} limit={kMaxImageBytes}")
                 return None, kImageNotFound
             loaded.append((name, data))
     else:
@@ -236,16 +262,25 @@ def loadImages(req):
             if not os.path.isfile(fullPath):
                 return None, kImageNotFound
             try:
+                size = os.path.getsize(fullPath)
+                if size > kMaxImageBytes:
+                    logLine(f"[IMG] [错误] [ng] file={name} bytes={size} limit={kMaxImageBytes}")
+                    return None, kImageNotFound
                 with open(fullPath, "rb") as f:
                     loaded.append((name, f.read()))
             except OSError:
                 return None, kImageNotFound
     images = []
     for name, data in loaded:
-        size = readImageInfo(data)
-        if size is None:
+        decoded = decodeImage(data)
+        if decoded is None:
+            logLine(f"[IMG] [错误] [ng] file={name} reason=decode failed")
             return None, kImageNotFound
-        images.append((name, data, size[0], size[1]))
+        pixels, width, height = decoded
+        if width * height > kMaxImagePixels:
+            logLine(f"[IMG] [错误] [ng] file={name} pixels={width * height} limit={kMaxImagePixels}")
+            return None, kImageNotFound
+        images.append((name, pixels, width, height))
     return images, kOk
 
 
@@ -329,10 +364,10 @@ def processRequest(req):
         return makeError(errorCode), 0.0
     allResults = []
     firstWidth, firstHeight = 0, 0
-    for name, data, width, height in images:
+    for name, pixels, width, height in images:
         for handle in handles:
             with g_inferLock:
-                defects = handle.predict(data, name, width, height)
+                defects = handle.predict(pixels, name, width, height)
             for d in defects:
                 d["file_name"] = name
             allResults.extend(defects)
@@ -404,7 +439,15 @@ class DefectHandler(BaseHTTPRequestHandler):
             f"[REQ] received | job_id={jobInfo} sample_id={sampleInfo} pose_id={poseInfo} "
             f"files={formatFileNames(fileNames)} mode={mode}"
         )
-        resp, elapsedMs = processRequest(req)
+        if not g_inferSlots.acquire(blocking=False):
+            resp = makeError(kSystemError, kBusyMsg)
+            logResponse(resp, req, 0.0)
+            self.sendJson(resp, extraHeaders={"X-Process-Ms": "0.0"})
+            return
+        try:
+            resp, elapsedMs = processRequest(req)
+        finally:
+            g_inferSlots.release()
         logResponse(resp, req, elapsedMs)
         self.sendJson(resp, extraHeaders={"X-Process-Ms": str(elapsedMs)})
 
@@ -533,10 +576,16 @@ def buildModels(config):
                 models[alias] = MockEngine(alias)
             else:
                 models[alias] = YoloEngine(alias, entry["path"], config.device, entry["conf"])
+            logLine(f"[MODEL] loaded | alias={alias} path={entry['path']} engine={kind} conf={entry['conf']}")
+            if entry["path"] is not None:
+                startMs = time.perf_counter()
+                models[alias].warmup()
+                logLine(
+                    f"[MODEL] warmup | alias={alias} elapsed={round((time.perf_counter() - startMs) * 1000, 1)}ms"
+                )
         except Exception as exc:
             logLine(f"[MODEL] [错误] [ng] alias={alias} path={entry['path']} error={exc}")
             raise
-        logLine(f"[MODEL] loaded | alias={alias} path={entry['path']} engine={kind} conf={entry['conf']}")
     return models
 
 
