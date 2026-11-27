@@ -20,7 +20,7 @@
     "interval_error": {
         "label_name": "sticker",
         "proper_interval": [50, 1000],
-        "gap": true
+        "edgedistORcenterdist": true
     },
     "share_root": "./shared"
 }

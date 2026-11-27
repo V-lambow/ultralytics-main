@@ -43,7 +43,7 @@ kCountErrorCode = "count_error"
 kIntervalErrorCode = "interval_error"
 kCheckKeys = {
     kCountErrorCode: ("label_name", "proper_count"),
-    kIntervalErrorCode: ("label_name", "proper_interval", "gap"),
+    kIntervalErrorCode: ("label_name", "proper_interval", "edgedistORcenterdist"),
 }
 
 kDefaultConfig = {
@@ -339,9 +339,9 @@ def formatFileNames(fileNames):
     return ",".join(names) or "-"
 
 
-def boxInterval(boxA, boxB, useGap):
-    """Return the edge gap (useGap) or center distance between two [x1, y1, x2, y2] boxes, in pixels."""
-    if useGap:
+def boxInterval(boxA, boxB, useEdgeDist):
+    """Return the edge distance (useEdgeDist) or center distance between two [x1, y1, x2, y2] boxes, in pixels."""
+    if useEdgeDist:
         dx = max(0, max(boxA[0], boxB[0]) - min(boxA[2], boxB[2]))
         dy = max(0, max(boxA[1], boxB[1]) - min(boxA[3], boxB[3]))
     else:
@@ -402,12 +402,12 @@ def applyChecks(defects, fileName):
         targets = [d for d in defects if d.get("code") == intervalRule["label_name"]]
         for i, targetA in enumerate(targets):
             for targetB in targets[i + 1 :]:
-                interval = boxInterval(targetA["box"], targetB["box"], intervalRule["gap"])
+                interval = boxInterval(targetA["box"], targetB["box"], intervalRule["edgedistORcenterdist"])
                 if not intervalRule["low"] <= interval <= intervalRule["high"]:
                     logLine(
                         f"[CHECK] [错误] [ng] file={fileName} interval_error label={intervalRule['label_name']} "
                         f"interval={round(interval, 2)} proper=[{intervalRule['low']},{intervalRule['high']}] "
-                        f"gap={intervalRule['gap']}"
+                        f"edgedistORcenterdist={intervalRule['edgedistORcenterdist']}"
                     )
                     defects.append(intervalErrorDefect(targetA, targetB))
     return defects
@@ -613,7 +613,7 @@ def loadWorkpieces(path, workpieces, models):
 
 
 def loadCheckRule(path, key, rule):
-    """Validate a count_error / interval_error rule, returning {label_name, low, high[, gap]} or None."""
+    """Validate a count/interval check rule, returning {label_name, low, high[, edgedistORcenterdist]} or None."""
     if rule is None:
         return None
     if not isinstance(rule, dict):
@@ -638,10 +638,13 @@ def loadCheckRule(path, key, rule):
         raise SystemExit(f"config file {path}: {key}.{rangeKey} min must not exceed max")
     loaded = {"label_name": label, "low": low, "high": high}
     if key == kIntervalErrorCode:
-        gap = rule.get("gap")
-        if not isinstance(gap, bool):
-            raise SystemExit(f"config file {path}: {key}.gap must be true (edge gap) or false (center distance)")
-        loaded["gap"] = gap
+        edgeDist = rule.get("edgedistORcenterdist")
+        if not isinstance(edgeDist, bool):
+            raise SystemExit(
+                f"config file {path}: {key}.edgedistORcenterdist must be true (edge distance) "
+                "or false (center distance)"
+            )
+        loaded["edgedistORcenterdist"] = edgeDist
     return loaded
 
 
@@ -734,7 +737,9 @@ def main():
         logLine(f"[WORKPIECE] {workpiece} -> {', '.join(aliases)}")
     for key, rule in ((kCountErrorCode, g_config.count_error), (kIntervalErrorCode, g_config.interval_error)):
         if rule is not None:
-            extra = "" if "gap" not in rule else f" gap={rule['gap']}"
+            extra = ""
+            if "edgedistORcenterdist" in rule:
+                extra = f" edgedistORcenterdist={rule['edgedistORcenterdist']}"
             logLine(f"[CHECK] rule | {key} label={rule['label_name']} proper=[{rule['low']},{rule['high']}]{extra}")
     os.makedirs(g_config.share_root, exist_ok=True)
     httpd = ThreadingHTTPServer((g_config.host, g_config.port), DefectHandler)

@@ -274,11 +274,11 @@ def testLoadConfigIntervalErrorRule():
     writeConfig(
         {
             "models": {"default": {"path": None}},
-            "interval_error": {"label_name": "ink", "proper_interval": [10, 20.5], "gap": False},
+            "interval_error": {"label_name": "ink", "proper_interval": [10, 20.5], "edgedistORcenterdist": False},
         }
     )
     cfg = server.loadConfig()
-    assert cfg.interval_error == {"label_name": "ink", "low": 10, "high": 20.5, "gap": False}
+    assert cfg.interval_error == {"label_name": "ink", "low": 10, "high": 20.5, "edgedistORcenterdist": False}
     assert cfg.count_error is None
 
 
@@ -303,10 +303,26 @@ def testLoadConfigRejectsBadCountError(rule, match):
 @pytest.mark.parametrize(
     ("rule", "match"),
     [
-        ({"label_name": "ink", "proper_interval": [1, 2]}, "gap must be true"),
-        ({"label_name": "ink", "proper_interval": [1, 2], "gap": "yes"}, "gap must be true"),
-        ({"label_name": "ink", "proper_interval": [1, 2], "gap": True, "proper_count": [1, 2]}, "unknown keys"),
-        ({"label_name": "ink", "proper_interval": [1, 2], "gap": True, "proper_count": [1, 2]}, "allowed"),
+        ({"label_name": "ink", "proper_interval": [1, 2]}, "must be true"),
+        ({"label_name": "ink", "proper_interval": [1, 2], "edgedistORcenterdist": "yes"}, "must be true"),
+        (
+            {
+                "label_name": "ink",
+                "proper_interval": [1, 2],
+                "edgedistORcenterdist": True,
+                "proper_count": [1, 2],
+            },
+            "unknown keys",
+        ),
+        (
+            {
+                "label_name": "ink",
+                "proper_interval": [1, 2],
+                "edgedistORcenterdist": True,
+                "proper_count": [1, 2],
+            },
+            "allowed",
+        ),
     ],
 )
 def testLoadConfigRejectsBadIntervalError(rule, match):
@@ -432,7 +448,7 @@ def useChecks(monkeypatch, count=None, interval=None):
     monkeypatch.setattr(server, "g_config", SimpleNamespace(count_error=count, interval_error=interval))
 
 
-def testBoxIntervalGapUsesNearestEdges():
+def testBoxIntervalEdgeDistUsesNearestEdges():
     assert server.boxInterval([0, 0, 10, 10], [13, 14, 20, 20], True) == pytest.approx(5.0)
     assert server.boxInterval([0, 0, 10, 10], [5, 5, 15, 15], True) == 0.0
     assert server.boxInterval([0, 0, 10, 10], [-5, -5, 5, 5], True) == 0.0
@@ -473,8 +489,8 @@ def testApplyChecksCountMissingTargets(monkeypatch):
     assert [d["code"] for d in defects] == ["ink", "count_error"]
 
 
-def testApplyChecksIntervalGapOutOfRangeCarriesBothTargets(monkeypatch):
-    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 5, "high": 10, "gap": True})
+def testApplyChecksIntervalEdgeDistOutOfRangeCarriesBothTargets(monkeypatch):
+    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 5, "high": 10, "edgedistORcenterdist": True})
     defects = [target("sticker", [0, 0, 10, 10], score=0.8), target("sticker", [12, 0, 22, 10], score=0.7)]
     server.applyChecks(defects, "a.jpg")
     defect = defects[-1]
@@ -491,28 +507,28 @@ def testApplyChecksIntervalGapOutOfRangeCarriesBothTargets(monkeypatch):
 
 
 def testApplyChecksIntervalInRangeLeavesResultsUntouched(monkeypatch):
-    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "gap": True})
+    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "edgedistORcenterdist": True})
     defects = [target("sticker", [0, 0, 10, 10]), target("sticker", [12, 0, 22, 10])]
     server.applyChecks(defects, "a.jpg")
     assert [d["code"] for d in defects] == ["sticker", "sticker"]
 
 
 def testApplyChecksIntervalCenterMode(monkeypatch):
-    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "gap": False})
+    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "edgedistORcenterdist": False})
     defects = [target("sticker", [0, 0, 10, 10]), target("sticker", [20, 0, 30, 10])]
     server.applyChecks(defects, "a.jpg")
     assert defects[-1]["code"] == "interval_error"
 
 
 def testApplyChecksIntervalReportsEveryOutOfRangePair(monkeypatch):
-    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "gap": True})
+    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "edgedistORcenterdist": True})
     defects = [target("sticker", [x, 0, x + 5, 5]) for x in (0, 20, 40)]
     server.applyChecks(defects, "a.jpg")
     assert [d["code"] for d in defects] == ["sticker"] * 3 + ["interval_error"] * 3
 
 
 def testApplyChecksIntervalOnlyPairsMatchingLabel(monkeypatch):
-    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "gap": True})
+    useChecks(monkeypatch, interval={"label_name": "sticker", "low": 0, "high": 10, "edgedistORcenterdist": True})
     defects = [target("sticker", [0, 0, 5, 5]), target("ink", [6, 0, 11, 5])]
     server.applyChecks(defects, "a.jpg")
     assert [d["code"] for d in defects] == ["sticker", "ink"]
@@ -543,7 +559,7 @@ def testProcessRequestAppliesChecksPerImage(monkeypatch):
 
 def testProcessRequestAppliesIntervalCheck(monkeypatch):
     models = useFakeModels(monkeypatch, ["sticker"])
-    server.g_config.interval_error = {"label_name": "sticker", "low": 0, "high": 10, "gap": True}
+    server.g_config.interval_error = {"label_name": "sticker", "low": 0, "high": 10, "edgedistORcenterdist": True}
     monkeypatch.setattr(server, "parseWorkpiece", lambda fileName: None)
     monkeypatch.setattr(
         models["sticker"],

@@ -345,8 +345,8 @@ shimada-predict_service/
 | `kLogDirName` = `"log"` / `kLogRetention` = 30 | 日志目录名（工作目录下）与保留的日志文件个数上限 |
 | `kLogFilePattern` | 日志文件名正则 `^\d{8}\.log$`，只有按日期命名的文件参与保留计数与清理 |
 | `kCountErrorCode` / `kIntervalErrorCode` | 规则复检生成的 `results[].code`：`"count_error"` / `"interval_error"` |
-| `kCheckKeys` | 两种规则的合法字段表（`label_name` / `proper_count` / `proper_interval` / `gap`），供 `loadCheckRule` 拦未知键 |
-| `boxInterval(boxA, boxB, useGap)` | 两框间距：`useGap=true` 取最近边缘间隙（重叠为 0），`false` 取中心点欧氏距离，单位像素 |
+| `kCheckKeys` | 两种规则的合法字段表（`label_name` / `proper_count` / `proper_interval` / `edgedistORcenterdist`），供 `loadCheckRule` 拦未知键 |
+| `boxInterval(boxA, boxB, useEdgeDist)` | 两框间距：`useEdgeDist=true` 取最近边缘间距（重叠为 0），`false` 取中心点欧氏距离，单位像素 |
 | `applyChecks(defects, fileName)` | 按图复检入口：追加 `count_error` / `interval_error` 条目并写 `[CHECK]` 日志，见 §4.8 |
 | `makeError(code, msg=None)` | 构造 `{"error_code":..., "error_msg":...}`；msg 缺省时查 `kErrorMsg` |
 | `logLine(message)` | 统一日志出口：加时间戳后打印到控制台并追加到 `log/YYYYMMDD.log`；跨天首次写入时清理旧文件 |
@@ -495,7 +495,7 @@ def resolveHandles(fileNames):
 | `[SERVICE]` | 启动、停止、配置非法 | `starting`（config / endpoint / default_model / device / share_root）、`started`（pid / log 目录）、`[错误] [ng]` + 退出原因、`stopped` |
 | `[MODEL]` | 每个别名构建完成、warmup 完成时 | `loaded`：alias / path / engine=mock 或 yolo / conf；`warmup`：alias / elapsed；失败为 `[错误] [ng]` + alias / path / error |
 | `[WORKPIECE]` | 启动时每个配对项一行 | `型号 -> 别名1, 别名2` |
-| `[CHECK]` | 启动时每条启用的复检规则一行；运行期每次命中 | `rule`：规则名 / label / proper 区间 / gap；命中为 `[错误] [ng]` + file / label / 实际 count 或 interval |
+| `[CHECK]` | 启动时每条启用的复检规则一行；运行期每次命中 | `rule`：规则名 / label / proper 区间 / edgedistORcenterdist；命中为 `[错误] [ng]` + file / label / 实际 count 或 interval |
 | `[IMG]` | 单图被拒时 | `[错误] [ng]` + file / 原因（invalid base64、bytes 超限、pixels 超限、decode failed） |
 | `[REQ]` | body 解析成功、推理之前 | `received`：job_id / sample_id / pose_id / files / mode=base64 或 share_dir |
 | `[RESP]` | 每个响应发出之前 | `[成功] [ok]`：三个 id / files / workpiece / models / defects=CODE:数量,... / total / elapsed；失败为 `[错误] [ng]` + error_code / error_msg / elapsed |
@@ -528,7 +528,7 @@ def resolveHandles(fileNames):
 "interval_error": {
     "label_name": "sticker",
     "proper_interval": [50, 1000],
-    "gap": true
+    "edgedistORcenterdist": true
 }
 ```
 
@@ -538,13 +538,13 @@ def resolveHandles(fileNames):
 | `count_error.proper_count` | `[min, max]` | 允许个数的闭区间（整数）；该图该类目标数不在区间内即追加一条 `count_error` |
 | `interval_error.label_name` | string | 要测距的类别码 |
 | `interval_error.proper_interval` | `[min, max]` | 允许间距的闭区间，单位像素 |
-| `interval_error.gap` | bool | `true` = 两框最近**边缘间隙**（重叠或包含按 0）；`false` = 两框**中心点距离** |
+| `interval_error.edgedistORcenterdist` | bool | `true` = 两框最近**边缘间距**（重叠或包含按 0）；`false` = 两框**中心点距离** |
 
 - 两项规则都**可选**，缺省 `null` 即不启用；写了对象就要求字段齐全、类型正确，否则启动报错退出（与 `models` 的校验同等严格）。
 - 执行位置：每张图的多个模型结果**合并后**调用 `applyChecks`，再统一补 `file_name`；多图逐张独立判定，不跨图累计；命中不改变 `error_code`（仍为 0）。
 - 个数缺陷：`code=count_error`、`score=1.0`、`area/length/volume=0`、`box/polygon/defect_raw=[]`（无区域）。
 - 间距缺陷：同类目标**两两组合**，每对超范围各追加一条 `code=interval_error`、`score=1.0`；`box` 是这一对目标的外接框，`area/length/volume` 按外接框计算；`defect_raw` 为 `[{"code","score","box"}, {"code","score","box"}]`——即超范围的两个 Target 各自的框。
-- 命中日志：`[CHECK] [错误] [ng] file=... count_error label=sticker count=3 proper=[1,2]` 与 `[CHECK] [错误] [ng] file=... interval_error label=sticker interval=12.5 proper=[50,1000] gap=true`。
+- 命中日志：`[CHECK] [错误] [ng] file=... count_error label=sticker count=3 proper=[1,2]` 与 `[CHECK] [错误] [ng] file=... interval_error label=sticker interval=12.5 proper=[50,1000] edgedistORcenterdist=true`。
 - `label_name` 必须是模型实际输出的类别名（YOLO 取 `result.names`，如 `sticker` / `ink`）；写错不会报错，只会因为计数为 0 而持续命中个数检查（或永不命中间距检查）。
 - 阈值是业务参数：示例值仅用于演示，按工件实测调整；改规则只需改 `config.json` 并重启。
 

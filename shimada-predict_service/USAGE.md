@@ -107,7 +107,7 @@ defects     : 2
 | `default_model` | string / null | `null` | 型号解析失败时的回落别名；省略时仅当 `models` 只有一项才自动取它，多项必须显式指定 |
 | `workpieces` | object | `{}` | 工件型号 → 模型别名数组的**配对表**，决定某型号跑哪些模型；不影响模型加载，见下 |
 | `count_error` | object / null | `null` | 个数复检规则：`label_name` + `proper_count: [min, max]`，超出即追加 `count_error` 缺陷 |
-| `interval_error` | object / null | `null` | 间距复检规则：`label_name` + `proper_interval: [min, max]` + `gap`（true=边缘间隙，false=中心距），超出即追加 `interval_error` 缺陷 |
+| `interval_error` | object / null | `null` | 间距复检规则：`label_name` + `proper_interval: [min, max]` + `edgedistORcenterdist`（true=边缘间距，false=中心距），超出即追加 `interval_error` 缺陷 |
 | `share_root` | string | `"./shared"` | 共享盘根目录（客户端 `relative_dir` 的基准），启动时自动创建 |
 
 `models` 的每个条目：
@@ -138,7 +138,7 @@ defects     : 2
 | `count_error.proper_count` | `[min, max]` | 允许个数的闭区间；该图该类目标数超出范围即追加一条 `code=count_error` |
 | `interval_error.label_name` | string | 要测距的类别码 |
 | `interval_error.proper_interval` | `[min, max]` | 允许间距的闭区间，单位像素 |
-| `interval_error.gap` | bool | `true` = 两框最近边缘间隙（重叠按 0）；`false` = 两框中心点距离 |
+| `interval_error.edgedistORcenterdist` | bool | `true` = 两框最近边缘间距（重叠按 0）；`false` = 两框中心点距离 |
 
 ```json
 "count_error": {
@@ -148,7 +148,7 @@ defects     : 2
 "interval_error": {
     "label_name": "sticker",
     "proper_interval": [50, 1000],
-    "gap": true
+    "edgedistORcenterdist": true
 }
 ```
 
@@ -184,7 +184,7 @@ defects     : 2
     "interval_error": {
         "label_name": "sticker",
         "proper_interval": [50, 1000],
-        "gap": true
+        "edgedistORcenterdist": true
     },
     "share_root": "./shared"
 }
@@ -314,7 +314,7 @@ python server.py
 - `defects=CODE:数量,...` 是该次响应中各缺陷代码的条数，`total` 是总条数，无缺陷时为 `defects=-`。
 - `workpiece` / `models` 是实际路由结果：解析规则未实现期间固定为 `workpiece=- models=<default_model>`；接入 `parseWorkpiece` 后显示解析出的型号及其全部别名。
 - 启动阶段另有 `[SERVICE]`（启动/停止/配置错误）、`[MODEL]`（每个别名的 `path`，yolo 模型还有一行 `warmup`）、`[WORKPIECE]`（配对表）、`[IMG]`（某张图被拒的原因：base64 非法、超字节/像素上限、解不开）几类行。
-- 启用了复检规则时：启动阶段每条规则一行 `[CHECK] rule | ...`；运行期每次命中一行 `[CHECK] [错误] [ng] file=... count_error ... count=... proper=[...]` 或 `... interval_error ... interval=... proper=[...] gap=...`，可据此核对阈值与实际值。
+- 启用了复检规则时：启动阶段每条规则一行 `[CHECK] rule | ...`；运行期每次命中一行 `[CHECK] [错误] [ng] file=... count_error ... count=... proper=[...]` 或 `... interval_error ... interval=... proper=[...] edgedistORcenterdist=...`，可据此核对阈值与实际值。
 - 请求过多时闸门会直接拒绝（`-1001`，`error_msg` 为"系统繁忙：并发请求过多，请稍后重试"），日志同样有 `[REQ]` / `[RESP]` 两行，可据此判断是过载而不是代码错误。
 - 只记录文件名，不记录图片内容、base64 或 `relative_dir`。
 
