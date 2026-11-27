@@ -76,6 +76,7 @@
 | `ext_params` 不回传 | 协议响应结构无此字段，服务端仅接收、不校验内容、不回传。 |
 | 双程序各自持有一份错误码常量 | 换取 `client.py` 可脱离 `server.py` 独立分发给对接方；常量表改动时两边需同步。 |
 | `workpieces` 配对表 | 型号 → 模型别名数组，作为服务端“文件名 → 型号 → 模型”路由的查表依据（`workpieceModels()`），不参与模型加载、也不改变协议字段。 |
+| 规则型缺陷 | `config.json` 的 `count_error` / `interval_error` 在推理后按图复检：个数或间距超出 `[min,max]` 时追加 `code=count_error` / `interval_error` 条目（`score=1.0`）。个数缺陷无区域（`box: []`）；间距缺陷 `box` 为超范围两目标的外接框、`defect_raw` 给出两个目标各自的 `box`。只追加结果，不改 `error_code`（见 §4.8）。 |
 | `error_msg` 中文文案 | 与协议错误码表原文一致；`error_code` 才是对接方应判断的字段。 |
 
 ---
@@ -237,7 +238,9 @@ results 条目：
 | `length` | int | 缺陷长度 px（当前 = 框长边） |
 | `volume` | int | 缺陷体积（当前 = area 占位） |
 | `box` | int[4] | `[左顶点X, 左顶点Y, 右顶点X, 右顶点Y]` 像素坐标（即 x1,y1,x2,y2） |
-| `polygon` / `defect_raw` | array | 恒空（预留，分割模型可填） |
+| `polygon` / `defect_raw` | array | 检测条目恒空（预留，分割模型可填）；`interval_error` 的 `defect_raw` 存放两个超范围目标 |
+
+规则型条目（`count_error` / `interval_error`）由配置复检生成，见 §4.8：前者 `box/polygon/defect_raw` 均为空数组、`area/length/volume` 为 0；后者 `box` 是超范围两目标的外接框，`defect_raw` 为两个目标各自的 `{code, score, box}`。
 
 成功与失败响应的完整示例见 [`examples/response_success.json`](examples/response_success.json) 与 [`examples/response_failure.json`](examples/response_failure.json)。
 
@@ -254,6 +257,7 @@ results 条目：
 | 并发上限 | 同时处理 ≤ 8 个请求（`kMaxInflight`），超出立即返回 -1001 系统繁忙，不排队堆积内存 |
 | 多图语义 | 逐张装图、逐张推理，结果按请求顺序合并进 `results`；**任一张失败则整个请求失败**，无部分成功 |
 | 模型选择 | 请求**不带**模型字段：`parseWorkpiece(file_names[0])` 得到型号 → 查 `workpieces` 表得到别名数组 → 按顺序逐张图、逐个模型推理并合并 `results`。解析规则未定期间 `parseWorkpiece` 返回 `None`，回落 `default_model` 单模型；型号存在但表里没有 → -1002 且不消耗装图/推理；日志 `[REQ] ... workpiece=... models=...` 记录实际选择 |
+| 缺陷复检 | 每张图的模型结果合并后按 `count_error` / `interval_error` 复检，命中只追加 `results` 条目，`error_code` 仍为 0；多图逐张独立判定、不跨图累计（见 §4.8） |
 | 共享盘时序前置 | 必须先把图片**写完盘**（文件句柄已关闭）再发 POST；服务端收到请求即刻读取，不等待、不轮询、不重试；写盘与发请求之间无确认机制，由文件系统保证 |
 | 时间口径 | 响应头 `X-Process-Ms` = 服务端处理耗时（校验+装图+推理，不含网络）；客户端 elapsed = 端到端（含建连与传输）；对账时以 X-Process-Ms 排除网络因素 |
 | 实测量级参考 | mock：全流程 2~20ms；yolo26n CPU：首次含模型加载约 3.1s（warmup），此后单图约百毫秒级 |
@@ -280,14 +284,14 @@ results 条目：
 shimada-predict_service/
 ├── server.py        # 服务端程序（接口 + mock/YOLO 推理引擎 + config.json 加载）
 ├── client.py        # 测试客户端程序（生成图 / 两种请求 / 错误码用例）
-├── config.json      # 服务端唯一配置来源（工作目录下读取，无命令行参数；含 models 别名表 + workpieces 配对表）
+├── config.json      # 服务端唯一配置来源（工作目录下读取，无命令行参数；models + workpieces + 两项复检规则）
 ├── examples/        # 报文示例（仅文档用途，运行时不读取）
 │   ├── request_base64.json     # 请求：base64 传图
 │   ├── request_share_dir.json  # 请求：共享盘传图
 │   ├── response_success.json   # 响应：error_code = 0
 │   └── response_failure.json   # 响应：error_code ≠ 0
 ├── requirements.txt # 依赖清单
-├── tests/           # pytest 用例（校验/装图/配置/路由/日志，不依赖模型与网络）
+├── tests/           # pytest 用例（校验/装图/配置/路由/复检/日志，不依赖模型与网络）
 ├── README.md        # 本文档：完整代码逻辑
 ├── USAGE.md         # 使用手册
 ├── shared/          # 服务端共享盘根目录（启动时自动创建，share_root 可改）
@@ -316,7 +320,7 @@ shimada-predict_service/
 ```
 
 - 服务端线程模型：`ThreadingHTTPServer` 为每个连接开一个线程；**推理由全局锁 `g_inferLock` 串行化**（YOLO 模型非线程安全，且产线推理通常单卡；多模型共用同一张卡时也必须串行）。
-- 服务端全局状态：`g_config`（`config.json` 解析结果，含 `models` 与 `workpieces` 两张表）、`g_models`（别名 → 引擎实例，每个实例带 `.alias`）、`g_defaultModel`、`g_inferLock`。
+- 服务端全局状态：`g_config`（`config.json` 解析结果，含 `models`、`workpieces` 两张表与两项复检规则）、`g_models`（别名 → 引擎实例，每个实例带 `.alias`）、`g_defaultModel`、`g_inferLock`。
 - 启动时按 `models` 逐个构建引擎并常驻（`path: null` → `MockEngine`，否则 `YoloEngine`）。请求不带模型字段：`parseWorkpiece(file_names[0])` 解析型号 → `workpieces` 查表 → 得到 1~N 个引擎句柄；解析未实现时回落 `default_model` 单模型。
 - `workpieces` 是型号 → 别名数组的**配对表**：全部模型仍然启动即加载，该表只供业务逻辑用 `workpieceModels(workpiece)` 查出该型号要调用哪些引擎句柄。
 
@@ -340,6 +344,10 @@ shimada-predict_service/
 | `kDefaultModelConf` = 0.25 | 模型条目未写 `conf` 时的默认置信度阈值 |
 | `kLogDirName` = `"log"` / `kLogRetention` = 30 | 日志目录名（工作目录下）与保留的日志文件个数上限 |
 | `kLogFilePattern` | 日志文件名正则 `^\d{8}\.log$`，只有按日期命名的文件参与保留计数与清理 |
+| `kCountErrorCode` / `kIntervalErrorCode` | 规则复检生成的 `results[].code`：`"count_error"` / `"interval_error"` |
+| `kCheckKeys` | 两种规则的合法字段表（`label_name` / `proper_count` / `proper_interval` / `gap`），供 `loadCheckRule` 拦未知键 |
+| `boxInterval(boxA, boxB, useGap)` | 两框间距：`useGap=true` 取最近边缘间隙（重叠为 0），`false` 取中心点欧氏距离，单位像素 |
+| `applyChecks(defects, fileName)` | 按图复检入口：追加 `count_error` / `interval_error` 条目并写 `[CHECK]` 日志，见 §4.8 |
 | `makeError(code, msg=None)` | 构造 `{"error_code":..., "error_msg":...}`；msg 缺省时查 `kErrorMsg` |
 | `logLine(message)` | 统一日志出口：加时间戳后打印到控制台并追加到 `log/YYYYMMDD.log`；跨天首次写入时清理旧文件 |
 | `decodeImage(bytes)` | **唯一解码入口**：优先 `cv2.imdecode` 一次解出 BGR ndarray + 宽高；cv2 不可用或解不开时回退 PIL 只读尺寸（mock 专用部署），都失败返回 `None` |
@@ -389,7 +397,7 @@ do_POST
             ├─ parseWorkpiece + 查 workpieces # 型号 → 引擎句柄[] → -1002
             ├─ loadImages                     # 装图+一次解码 → -1003 / -1004
             ├─ for 每张图: for 每个 handle: g_inferLock + handle.predict
-            │    └─ 缺陷条目补 "file_name"
+            │    └─ 合并该图结果 → applyChecks 复检 → 全部条目补 "file_name"
             └─ 组装 data（严格按协议字段）→ {"error_code":0, "error_msg":"OK", "data":{...}}
   响应头额外带 X-Process-Ms（服务端处理耗时，仅诊断用）
 ```
@@ -428,7 +436,7 @@ do_POST
 
 ### 4.5 启动流程（`main`）
 
-1. `loadConfig` 从**工作目录**读取 `config.json`（`os.getcwd()`），用 `kDefaultConfig` 补齐缺省键，校验未知键与各字段类型/范围；任一项不合法即打印原因并以退出码 1 结束，**端口不会被打开**。
+1. `loadConfig` 从**工作目录**读取 `config.json`（`os.getcwd()`），用 `kDefaultConfig` 补齐缺省键，校验未知键与各字段类型/范围（含两项复检规则 `count_error` / `interval_error`）；任一项不合法即打印原因并以退出码 1 结束，**端口不会被打开**。
 2. `loadModels` 逐个校验 `models`：别名需匹配 `^[A-Za-z0-9_.-]{1,64}$`、条目只允许 `path`/`conf` 两个键、`path` 为 `null`（mock）或非空字符串、`conf` ∈ [0, 1]（缺省 0.25）；`default_model` 缺省时仅在**只有一个模型**时自动取它，多个模型必须显式指定。
 3. `loadWorkpieces` 校验 `workpieces`：键匹配 `^\S{1,64}$`、值是非空数组、数组元素必须是 `models` 里已存在的别名且同一型号内不重复；空表 `{}` 合法。
 4. `buildModels` 按别名构建引擎：`path` 为 `null` → `MockEngine(alias)`，否则 `YoloEngine(alias, path, device, conf)`（此时才 import ultralytics 并加载权重，fail-fast）。yolo 模型紧接着 `warmup()` 跑一张 640×640 黑图，把首次推理开销（权重初始化/编译/显存分配）压到启动阶段；warmup 失败同样以退出码 1 结束。配对表不参与这一步，所有别名一律加载。
@@ -436,7 +444,7 @@ do_POST
 6. `ThreadingHTTPServer((host, port), DefectHandler)` 启动，通过 `logLine` 输出 config / endpoint / default / 每个 model / 每个 workpiece / share root（见 §4.7）。
 7. `serve_forever()`；`Ctrl+C` 优雅退出（`server_close()`）。
 
-配置在启动时读一次，运行期不重读：改 `models`（增删模型、换权重、改 conf）、`workpieces`（改配对）或 `host / port / endpoint / device / share_root` 都必须重启服务才生效，请求里没有任何字段能覆盖它们。
+配置在启动时读一次，运行期不重读：改 `models`（增删模型、换权重、改 conf）、`workpieces`（改配对）、`count_error` / `interval_error`（改复检阈值或启停）或 `host / port / endpoint / device / share_root` 都必须重启服务才生效，请求里没有任何字段能覆盖它们。
 
 ### 4.6 型号 → 模型配对表（`workpieces`）
 
@@ -480,13 +488,14 @@ def resolveHandles(fileNames):
 - **保留策略**：`kLogRetention = 30`，只统计匹配 `^\d{8}\.log$` 的文件；跨天首次写入时按文件名排序删除最旧的，直到剩 30 个（含当天）。同一天内重启不会触发清理，也不会新建文件。
 - 并发安全：`g_logLock` 串行化"打印 + 写文件 + 清理"，多线程并发请求不会写出交错的行。
 
-日志内容分六类，`[REQ]` / `[RESP]` 每个请求各一行：
+日志内容分七类，`[REQ]` / `[RESP]` 每个请求各一行：
 
 | 标签 | 触发时机 | 字段 |
 |---|---|---|
 | `[SERVICE]` | 启动、停止、配置非法 | `starting`（config / endpoint / default_model / device / share_root）、`started`（pid / log 目录）、`[错误] [ng]` + 退出原因、`stopped` |
 | `[MODEL]` | 每个别名构建完成、warmup 完成时 | `loaded`：alias / path / engine=mock 或 yolo / conf；`warmup`：alias / elapsed；失败为 `[错误] [ng]` + alias / path / error |
 | `[WORKPIECE]` | 启动时每个配对项一行 | `型号 -> 别名1, 别名2` |
+| `[CHECK]` | 启动时每条启用的复检规则一行；运行期每次命中 | `rule`：规则名 / label / proper 区间 / gap；命中为 `[错误] [ng]` + file / label / 实际 count 或 interval |
 | `[IMG]` | 单图被拒时 | `[错误] [ng]` + file / 原因（invalid base64、bytes 超限、pixels 超限、decode failed） |
 | `[REQ]` | body 解析成功、推理之前 | `received`：job_id / sample_id / pose_id / files / mode=base64 或 share_dir |
 | `[RESP]` | 每个响应发出之前 | `[成功] [ok]`：三个 id / files / workpiece / models / defects=CODE:数量,... / total / elapsed；失败为 `[错误] [ng]` + error_code / error_msg / elapsed |
@@ -506,6 +515,38 @@ def resolveHandles(fileNames):
 ```
 
 日志只记录**文件名**：不记录图片内容（base64 不落盘）、不记录请求体大小与 `relative_dir`。
+
+### 4.8 缺陷复检规则（`count_error` / `interval_error`）
+
+两项规则在 `config.json` 顶层声明、全局生效：每张图的所有模型结果合并后、写响应之前由 `applyChecks` 复检，只对 `code` 等于 `label_name` 的条目生效。
+
+```json
+"count_error": {
+    "label_name": "sticker",
+    "proper_count": [1, 2]
+},
+"interval_error": {
+    "label_name": "sticker",
+    "proper_interval": [50, 1000],
+    "gap": true
+}
+```
+
+| 键 | 类型 | 说明 |
+|---|---|---|
+| `count_error.label_name` | string | 要计数的类别码，与 `results[].code` 精确匹配（区分大小写） |
+| `count_error.proper_count` | `[min, max]` | 允许个数的闭区间（整数）；该图该类目标数不在区间内即追加一条 `count_error` |
+| `interval_error.label_name` | string | 要测距的类别码 |
+| `interval_error.proper_interval` | `[min, max]` | 允许间距的闭区间，单位像素 |
+| `interval_error.gap` | bool | `true` = 两框最近**边缘间隙**（重叠或包含按 0）；`false` = 两框**中心点距离** |
+
+- 两项规则都**可选**，缺省 `null` 即不启用；写了对象就要求字段齐全、类型正确，否则启动报错退出（与 `models` 的校验同等严格）。
+- 执行位置：每张图的多个模型结果**合并后**调用 `applyChecks`，再统一补 `file_name`；多图逐张独立判定，不跨图累计；命中不改变 `error_code`（仍为 0）。
+- 个数缺陷：`code=count_error`、`score=1.0`、`area/length/volume=0`、`box/polygon/defect_raw=[]`（无区域）。
+- 间距缺陷：同类目标**两两组合**，每对超范围各追加一条 `code=interval_error`、`score=1.0`；`box` 是这一对目标的外接框，`area/length/volume` 按外接框计算；`defect_raw` 为 `[{"code","score","box"}, {"code","score","box"}]`——即超范围的两个 Target 各自的框。
+- 命中日志：`[CHECK] [错误] [ng] file=... count_error label=sticker count=3 proper=[1,2]` 与 `[CHECK] [错误] [ng] file=... interval_error label=sticker interval=12.5 proper=[50,1000] gap=true`。
+- `label_name` 必须是模型实际输出的类别名（YOLO 取 `result.names`，如 `sticker` / `ink`）；写错不会报错，只会因为计数为 0 而持续命中个数检查（或永不命中间距检查）。
+- 阈值是业务参数：示例值仅用于演示，按工件实测调整；改规则只需改 `config.json` 并重启。
 
 ---
 

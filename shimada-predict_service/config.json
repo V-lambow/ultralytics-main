@@ -13,5 +13,14 @@
     "workpieces": {
         "A100": ["default"]
     },
+    "count_error": {
+        "label_name": "sticker",
+        "proper_count": [1, 2]
+    },
+    "interval_error": {
+        "label_name": "sticker",
+        "proper_interval": [50, 1000],
+        "gap": true
+    },
     "share_root": "./shared"
 }

@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import io
 import json
+import math
 import os
 import random
 import re
@@ -38,6 +39,12 @@ kDefaultModelConf = 0.25
 kLogDirName = "log"
 kLogRetention = 30
 kLogFilePattern = re.compile(r"^\d{8}\.log$")
+kCountErrorCode = "count_error"
+kIntervalErrorCode = "interval_error"
+kCheckKeys = {
+    kCountErrorCode: ("label_name", "proper_count"),
+    kIntervalErrorCode: ("label_name", "proper_interval", "gap"),
+}
 
 kDefaultConfig = {
     "host": "127.0.0.1",
@@ -48,6 +55,8 @@ kDefaultConfig = {
     "default_model": None,
     "workpieces": {},
     "share_root": "./shared",
+    kCountErrorCode: None,
+    kIntervalErrorCode: None,
 }
 
 g_config = None
@@ -330,6 +339,80 @@ def formatFileNames(fileNames):
     return ",".join(names) or "-"
 
 
+def boxInterval(boxA, boxB, useGap):
+    """Return the edge gap (useGap) or center distance between two [x1, y1, x2, y2] boxes, in pixels."""
+    if useGap:
+        dx = max(0, max(boxA[0], boxB[0]) - min(boxA[2], boxB[2]))
+        dy = max(0, max(boxA[1], boxB[1]) - min(boxA[3], boxB[3]))
+    else:
+        dx = (boxA[0] + boxA[2] - boxB[0] - boxB[2]) / 2
+        dy = (boxA[1] + boxA[3] - boxB[1] - boxB[3]) / 2
+    return math.hypot(dx, dy)
+
+
+def countErrorDefect():
+    """Rule-based count defect: no target region, so every geometry field is empty/zero."""
+    return {
+        "code": kCountErrorCode,
+        "score": 1.0,
+        "area": 0,
+        "length": 0,
+        "volume": 0,
+        "box": [],
+        "polygon": [],
+        "defect_raw": [],
+    }
+
+
+def intervalErrorDefect(targetA, targetB):
+    """Rule-based spacing defect: box is the pair's outer box, defect_raw carries both target boxes."""
+    x1 = min(targetA["box"][0], targetB["box"][0])
+    y1 = min(targetA["box"][1], targetB["box"][1])
+    x2 = max(targetA["box"][2], targetB["box"][2])
+    y2 = max(targetA["box"][3], targetB["box"][3])
+    area = (x2 - x1) * (y2 - y1)
+    return {
+        "code": kIntervalErrorCode,
+        "score": 1.0,
+        "area": area,
+        "length": max(x2 - x1, y2 - y1),
+        "volume": area,
+        "box": [x1, y1, x2, y2],
+        "polygon": [],
+        "defect_raw": [
+            {"code": target["code"], "score": target["score"], "box": list(target["box"])}
+            for target in (targetA, targetB)
+        ],
+    }
+
+
+def applyChecks(defects, fileName):
+    """Append count_error / interval_error entries based on one image's merged model output."""
+    countRule = g_config.count_error
+    if countRule is not None:
+        count = sum(1 for d in defects if d.get("code") == countRule["label_name"])
+        if not countRule["low"] <= count <= countRule["high"]:
+            logLine(
+                f"[CHECK] [错误] [ng] file={fileName} count_error label={countRule['label_name']} "
+                f"count={count} proper=[{countRule['low']},{countRule['high']}]"
+            )
+            defects.append(countErrorDefect())
+    intervalRule = g_config.interval_error
+    if intervalRule is not None:
+        targets = [d for d in defects if d.get("code") == intervalRule["label_name"]]
+        for i, targetA in enumerate(targets):
+            for targetB in targets[i + 1 :]:
+                interval = boxInterval(targetA["box"], targetB["box"], intervalRule["gap"])
+                if not intervalRule["low"] <= interval <= intervalRule["high"]:
+                    logLine(
+                        f"[CHECK] [错误] [ng] file={fileName} interval_error label={intervalRule['label_name']} "
+                        f"interval={round(interval, 2)} proper=[{intervalRule['low']},{intervalRule['high']}] "
+                        f"gap={intervalRule['gap']}"
+                    )
+                    defects.append(intervalErrorDefect(targetA, targetB))
+    return defects
+
+
 def logResponse(resp, req, elapsedMs):
     jobInfo = req.get("job_id", "?") if isinstance(req, dict) else "?"
     sampleInfo = req.get("sample_id", "?") if isinstance(req, dict) else "?"
@@ -365,12 +448,14 @@ def processRequest(req):
     allResults = []
     firstWidth, firstHeight = 0, 0
     for name, pixels, width, height in images:
+        imageResults = []
         for handle in handles:
             with g_inferLock:
-                defects = handle.predict(pixels, name, width, height)
-            for d in defects:
-                d["file_name"] = name
-            allResults.extend(defects)
+                imageResults.extend(handle.predict(pixels, name, width, height))
+        applyChecks(imageResults, name)
+        for d in imageResults:
+            d["file_name"] = name
+        allResults.extend(imageResults)
         if firstWidth == 0:
             firstWidth, firstHeight = width, height
     data = {
@@ -463,7 +548,9 @@ class DefectHandler(BaseHTTPRequestHandler):
 
 
 class Config:
-    def __init__(self, host, port, endpoint, device, models, default_model, workpieces, share_root):
+    def __init__(
+        self, host, port, endpoint, device, models, default_model, workpieces, share_root, count_error, interval_error
+    ):
         self.host = host
         self.port = port
         self.endpoint = endpoint
@@ -472,6 +559,8 @@ class Config:
         self.default_model = default_model
         self.workpieces = workpieces
         self.share_root = share_root
+        self.count_error = count_error
+        self.interval_error = interval_error
 
 
 def loadModels(path, models):
@@ -523,6 +612,39 @@ def loadWorkpieces(path, workpieces, models):
     return loaded
 
 
+def loadCheckRule(path, key, rule):
+    """Validate a count_error / interval_error rule, returning {label_name, low, high[, gap]} or None."""
+    if rule is None:
+        return None
+    if not isinstance(rule, dict):
+        raise SystemExit(f"config file {path}: {key} must be null or a json object")
+    allowed = list(kCheckKeys[key])
+    unknown = sorted(set(rule) - set(allowed))
+    if unknown:
+        raise SystemExit(f"config file {path}: {key} has unknown keys {unknown}, allowed: {allowed}")
+    label = rule.get("label_name")
+    if not isinstance(label, str) or not label.strip():
+        raise SystemExit(f"config file {path}: {key}.label_name must be a non-empty string")
+    rangeKey = allowed[1]
+    bounds = rule.get(rangeKey)
+    if (
+        not isinstance(bounds, list)
+        or len(bounds) != 2
+        or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in bounds)
+    ):
+        raise SystemExit(f"config file {path}: {key}.{rangeKey} must be [min, max] with two numbers")
+    low, high = bounds
+    if low > high:
+        raise SystemExit(f"config file {path}: {key}.{rangeKey} min must not exceed max")
+    loaded = {"label_name": label, "low": low, "high": high}
+    if key == kIntervalErrorCode:
+        gap = rule.get("gap")
+        if not isinstance(gap, bool):
+            raise SystemExit(f"config file {path}: {key}.gap must be true (edge gap) or false (center distance)")
+        loaded["gap"] = gap
+    return loaded
+
+
 def loadConfig():
     path = os.path.join(os.getcwd(), kConfigFileName)
     try:
@@ -564,7 +686,11 @@ def loadConfig():
     shareRoot = cfg["share_root"]
     if not isinstance(shareRoot, str) or not shareRoot.strip():
         raise SystemExit(f"config file {path}: share_root must be a non-empty string")
-    return Config(host, port, endpoint, device, models, defaultModel, workpieces, shareRoot)
+    countError = loadCheckRule(path, kCountErrorCode, cfg[kCountErrorCode])
+    intervalError = loadCheckRule(path, kIntervalErrorCode, cfg[kIntervalErrorCode])
+    return Config(
+        host, port, endpoint, device, models, defaultModel, workpieces, shareRoot, countError, intervalError
+    )
 
 
 def buildModels(config):
@@ -606,6 +732,10 @@ def main():
     g_models = buildModels(g_config)
     for workpiece, aliases in g_config.workpieces.items():
         logLine(f"[WORKPIECE] {workpiece} -> {', '.join(aliases)}")
+    for key, rule in ((kCountErrorCode, g_config.count_error), (kIntervalErrorCode, g_config.interval_error)):
+        if rule is not None:
+            extra = "" if "gap" not in rule else f" gap={rule['gap']}"
+            logLine(f"[CHECK] rule | {key} label={rule['label_name']} proper=[{rule['low']},{rule['high']}]{extra}")
     os.makedirs(g_config.share_root, exist_ok=True)
     httpd = ThreadingHTTPServer((g_config.host, g_config.port), DefectHandler)
     logLine(f"[SERVICE] started | pid={os.getpid()} log={logDir()}")

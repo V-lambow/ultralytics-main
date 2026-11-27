@@ -95,7 +95,7 @@ defects     : 2
 
 ### 4.1 服务端配置 `config.json`
 
-`server.py` **不接收命令行参数**，启动时只读工作目录（`os.getcwd()`）下的 `config.json`，必须是 UTF-8 编码的 JSON 对象。8 个键**全部可选**，缺省值如下：
+`server.py` **不接收命令行参数**，启动时只读工作目录（`os.getcwd()`）下的 `config.json`，必须是 UTF-8 编码的 JSON 对象。10 个键**全部可选**，缺省值如下：
 
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -106,6 +106,8 @@ defects     : 2
 | `models` | object | `{"default": {"path": null}}` | 模型别名表，键即别名；每个值只能有 `path` 和 `conf` 两个字段，见下 |
 | `default_model` | string / null | `null` | 型号解析失败时的回落别名；省略时仅当 `models` 只有一项才自动取它，多项必须显式指定 |
 | `workpieces` | object | `{}` | 工件型号 → 模型别名数组的**配对表**，决定某型号跑哪些模型；不影响模型加载，见下 |
+| `count_error` | object / null | `null` | 个数复检规则：`label_name` + `proper_count: [min, max]`，超出即追加 `count_error` 缺陷 |
+| `interval_error` | object / null | `null` | 间距复检规则：`label_name` + `proper_interval: [min, max]` + `gap`（true=边缘间隙，false=中心距），超出即追加 `interval_error` 缺陷 |
 | `share_root` | string | `"./shared"` | 共享盘根目录（客户端 `relative_dir` 的基准），启动时自动创建 |
 
 `models` 的每个条目：
@@ -128,7 +130,35 @@ defects     : 2
 
 型号来源是**请求里的文件名**：`parseWorkpiece(file_names[0])` 从文件名解析型号。目前解析规则与型号清单都未定，函数留空返回 `None`（代码里有 `TODO`），此时服务端回落 `default_model` 跑单模型，行为与之前一致。规则确定后只改 `parseWorkpiece` 一个函数即可，配对表、多模型执行、日志都已就绪。
 
-校验规则：**出现未知键直接报错退出**（顶层未知键、`models` 条目内未知键都拦，防止 `modle` 这类拼写错误或误以为支持按模型分卡）；类型/范围不对同样报错退出，错误信息带完整文件路径。
+两项**缺陷复检规则**（可选，全局生效）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `count_error.label_name` | string | 要计数的类别码，与 `results[].code` 精确匹配（区分大小写） |
+| `count_error.proper_count` | `[min, max]` | 允许个数的闭区间；该图该类目标数超出范围即追加一条 `code=count_error` |
+| `interval_error.label_name` | string | 要测距的类别码 |
+| `interval_error.proper_interval` | `[min, max]` | 允许间距的闭区间，单位像素 |
+| `interval_error.gap` | bool | `true` = 两框最近边缘间隙（重叠按 0）；`false` = 两框中心点距离 |
+
+```json
+"count_error": {
+    "label_name": "sticker",
+    "proper_count": [1, 2]
+},
+"interval_error": {
+    "label_name": "sticker",
+    "proper_interval": [50, 1000],
+    "gap": true
+}
+```
+
+- 每张图的所有模型结果合并后复检，命中只往 `results` 追加条目，`error_code` 仍为 0；多图逐张独立判定。
+- `count_error` 无区域：`area/length/volume=0`，`box/polygon/defect_raw` 均为 `[]`。
+- `interval_error` 给出超范围的两个 Target：`box` 是两者外接框，`defect_raw` 为 `[{code,score,box},{code,score,box}]`；同类目标两两组合，每对超范围各一条。
+- `label_name` 必须是模型实际输出的类别名（YOLO 用 `result.names`）；写错不会报错，但会持续命中个数检查/永不命中间距检查。
+- 阈值示例仅用于演示，按工件实测调整；改完重启服务生效。
+
+校验规则：**出现未知键直接报错退出**（顶层未知键、`models` 条目内未知键、复检规则内未知字段都拦，防止 `modle` 这类拼写错误或误以为支持按模型分卡）；类型/范围不对同样报错退出，错误信息带完整文件路径。
 
 示例——两个模型 + 对外监听（`device` 统一，`conf` 按模型覆盖）：
 
@@ -146,6 +176,15 @@ defects     : 2
     "workpieces": {
         "A100": ["fd_v3", "seg_v1"],
         "B200": ["fd_v3"]
+    },
+    "count_error": {
+        "label_name": "sticker",
+        "proper_count": [1, 2]
+    },
+    "interval_error": {
+        "label_name": "sticker",
+        "proper_interval": [50, 1000],
+        "gap": true
     },
     "share_root": "./shared"
 }
@@ -171,7 +210,7 @@ defects     : 2
 
 保存后**重启** `python server.py` 才生效：配置只在启动时读一次，运行期不重读，请求里没有任何字段能覆盖这些设置。
 
-校验规则补充：`models` 为空、模型条目含未知键（如误写 `device`）、`default_model` 指向不存在的别名、`workpieces` 引用了不存在的别名或同一型号内重复、型号键含空白，都会启动即报错退出。
+校验规则补充：`models` 为空、模型条目含未知键（如误写 `device`）、`default_model` 指向不存在的别名、`workpieces` 引用了不存在的别名或同一型号内重复、型号键含空白、`count_error` / `interval_error` 字段不全或类型不对，都会启动即报错退出。
 
 ### 4.2 客户端 client.py
 
@@ -250,6 +289,7 @@ python server.py
 - 检出框 `xyxy` 直接映射协议 `box`；类别名映射 `code`；置信度映射 `score`。
 - `area/length/volume` 目前是**框的占位值**（框面积/框长边），接入真实测量逻辑见 README §6。
 - 无检出时 `results: []`，`error_code` 仍为 0 —— 这是正常业务结果。
+- `count_error` / `interval_error` 复检同样作用于模型输出：`label_name` 写模型实际类别名（如 `sticker` / `ink`），`proper_count` 是个数区间、`proper_interval` 是像素间距区间。
 
 ## 7. 运行日志
 
@@ -274,6 +314,7 @@ python server.py
 - `defects=CODE:数量,...` 是该次响应中各缺陷代码的条数，`total` 是总条数，无缺陷时为 `defects=-`。
 - `workpiece` / `models` 是实际路由结果：解析规则未实现期间固定为 `workpiece=- models=<default_model>`；接入 `parseWorkpiece` 后显示解析出的型号及其全部别名。
 - 启动阶段另有 `[SERVICE]`（启动/停止/配置错误）、`[MODEL]`（每个别名的 `path`，yolo 模型还有一行 `warmup`）、`[WORKPIECE]`（配对表）、`[IMG]`（某张图被拒的原因：base64 非法、超字节/像素上限、解不开）几类行。
+- 启用了复检规则时：启动阶段每条规则一行 `[CHECK] rule | ...`；运行期每次命中一行 `[CHECK] [错误] [ng] file=... count_error ... count=... proper=[...]` 或 `... interval_error ... interval=... proper=[...] gap=...`，可据此核对阈值与实际值。
 - 请求过多时闸门会直接拒绝（`-1001`，`error_msg` 为"系统繁忙：并发请求过多，请稍后重试"），日志同样有 `[REQ]` / `[RESP]` 两行，可据此判断是过载而不是代码错误。
 - 只记录文件名，不记录图片内容、base64 或 `relative_dir`。
 
@@ -354,6 +395,8 @@ var payload = new
 | 响应 -1001 `系统繁忙：并发请求过多` | 同时处理中的请求超过 8 个（`kMaxInflight`），服务端直接拒绝而不是排队；降低客户端并发、加重试退避，或按机器内存调大该常量 |
 | 响应 -1004 但图片看起来正常 | 单图超过 128MB（`kMaxImageBytes`）或解码后超过 3000 万像素（`kMaxImagePixels`）；看日志里的 `[IMG]` 行确认是 bytes 还是 pixels 超限 |
 | 改了代码但行为没变 | Windows 上两个实例可能同时占用 9000（`SO_REUSEADDR`），先确认没有残留 `python.exe` 再启动 |
+| `results` 里出现 `count_error` / `interval_error` | 触发了 `config.json` 的复检规则，不是推理错误（`error_code` 仍为 0）。看日志 `[CHECK]` 行确认实际 count/interval 与允许区间，按工艺调整阈值，或把对应规则设为 `null` 关闭 |
+| 改复检阈值没生效 | 与 `models` / `workpieces` 一样只在启动时读一次，需重启 `python server.py` |
 | 想看每次请求耗时 | 看 `log/YYYYMMDD.log` 里 `[RESP] ... elapsed=...ms`，或响应头 `X-Process-Ms` |
 | 日志在哪、能留多久 | 工作目录下 `log/`，按天一个文件，最多 30 个（见 §7）；同一天重启会续写同一个文件 |
 | 磁盘满了 / 不想写日志 | 删旧文件即可（运行中删除安全）；目录设为只读只会告警一次，服务不中断 |
@@ -365,10 +408,10 @@ var payload = new
 |---|---|
 | `server.py` | 服务端（接口 + mock/YOLO 引擎 + `config.json` 加载） |
 | `client.py` | 测试客户端 |
-| `config.json` | 服务端唯一配置（工作目录下读取；含 `models` 别名表 + `workpieces` 配对表 + `default_model`，无命令行参数） |
+| `config.json` | 服务端唯一配置（工作目录下读取；`models` 别名表 + `workpieces` 配对表 + `count_error` / `interval_error` 复检规则 + `default_model`，无命令行参数） |
 | `examples/` | 报文示例：`request_base64.json`、`request_share_dir.json`、`response_success.json`、`response_failure.json`（仅对照用，运行时不读取） |
 | `requirements.txt` | 依赖：`pillow`（必装）、`ultralytics`（可选） |
-| `tests/` | pytest 用例：请求校验、装图与大小限制、配置校验、型号路由、日志保留 |
+| `tests/` | pytest 用例：请求校验、装图与大小限制、配置校验、型号路由、缺陷复检、日志保留 |
 | `README.md` | 完整代码逻辑说明 |
 | `USAGE.md` | 本手册 |
 | `shared/` | 服务端共享盘根目录（运行时生成） |
